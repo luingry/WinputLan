@@ -81,10 +81,15 @@ namespace WinputLan.Core
         public HotkeyGesture Gesture { get; set; }
     }
 
-    // WH_KEYBOARD_LL must leave configured chords visible to RegisterHotKey; this class is deterministic and side-effect free.
-    public sealed class HotkeyBypassDetector
+    public interface IHotkeyChordDetector
     {
-        private readonly HashSet<uint> _bypassedKeys = new HashSet<uint>();
+        bool TryHandle(InputEvent value, out HotkeyAction? action);
+    }
+
+    // Only a completed terminal key is a chord. Modifiers continue to the remote stream unless the chord is actively claimed.
+    public sealed class HotkeyBypassDetector : IHotkeyChordDetector
+    {
+        private readonly HashSet<uint> _terminalKeys = new HashSet<uint>();
         private readonly HashSet<uint> _downKeys = new HashSet<uint>();
         private HotkeyGesture _local;
         private HotkeyGesture _remote;
@@ -94,23 +99,26 @@ namespace WinputLan.Core
         public void Reconfigure(HotkeyGesture local, HotkeyGesture remote)
         {
             HotkeyValidator.Validate(local); HotkeyValidator.Validate(remote);
-            _local = local; _remote = remote; _bypassedKeys.Clear(); _downKeys.Clear();
+            _local = local; _remote = remote; _terminalKeys.Clear(); _downKeys.Clear();
         }
 
-        public bool ShouldBypass(InputEvent value)
+        public bool TryHandle(InputEvent value, out HotkeyAction? action)
         {
+            action = null;
             if (value == null || (value.Kind != InputKind.KeyDown && value.Kind != InputKind.KeyUp)) return false;
             var key = (uint)value.VirtualKey;
             if (value.Kind == InputKind.KeyDown) _downKeys.Add(key); else _downKeys.Remove(key);
-            if (IsModifierKey(key) && UsesModifier(key)) return Remember(key, value.Kind);
-            if (value.Kind == InputKind.KeyDown && (Matches(_local, key) || Matches(_remote, key))) return Remember(key, value.Kind);
-            if (value.Kind == InputKind.KeyUp && _bypassedKeys.Remove(key)) return true;
+            if (IsModifierKey(key)) return false;
+            if (value.Kind == InputKind.KeyDown)
+            {
+                if (Matches(_local, key)) { _terminalKeys.Add(key); action = HotkeyAction.SelectLocal; return true; }
+                if (Matches(_remote, key)) { _terminalKeys.Add(key); action = HotkeyAction.SelectRemote; return true; }
+            }
+            if (value.Kind == InputKind.KeyUp && _terminalKeys.Remove(key)) return true;
             return false;
         }
 
-        private bool Remember(uint key, InputKind kind) { if (kind == InputKind.KeyDown) _bypassedKeys.Add(key); else _bypassedKeys.Remove(key); return true; }
         private bool Matches(HotkeyGesture gesture, uint key) { return gesture.VirtualKey == key && CurrentModifiers() == gesture.Modifiers; }
-        private bool UsesModifier(uint key) { var modifier = ModifierFor(key); return (_local.Modifiers & modifier) != 0 || (_remote.Modifiers & modifier) != 0; }
         private HotkeyModifiers CurrentModifiers()
         {
             var result = HotkeyModifiers.None;

@@ -30,6 +30,8 @@ namespace WinputLan
         private PairingCoordinator _listenerPairingCoordinator;
         private PairingCoordinator _confirmationCoordinator;
         private CancellationTokenSource _listenerCts;
+        private Task _listenerTask;
+        private readonly SemaphoreSlim _listenerRestartGate = new SemaphoreSlim(1, 1);
         private CancellationTokenSource _reconnectCts;
         private PinStore _pinStore;
         private InputRouter _inputRouter;
@@ -85,14 +87,19 @@ namespace WinputLan
                 _listenerTransport = new PeerTransport();
                 _listenerPairingCoordinator = CreatePairingCoordinator(_listenerTransport);
                 _listenerCts = new CancellationTokenSource();
-                _ = StartListenerAsync();
+                _listenerTask = StartListenerAsync(_listenerCts.Token);
                 _inputRouter = new InputRouter(_inputQueue, _transport, _inputSink);
                 _inputReceiver = new PairedInputReceiver(_transport, _inputSink);
                 _listenerInputReceiver = new PairedInputReceiver(_listenerTransport, _inputSink);
                 _inputRouter.InputAudited += AuditInput;
                 _inputReceiver.InputAudited += AuditInput;
                 _listenerInputReceiver.InputAudited += AuditInput;
-                _capture = new LowLevelInputCapture(_inputRouter, _hotkeyBypass.ShouldBypass);
+                _capture = new LowLevelInputCapture(_inputRouter, _hotkeyBypass, action =>
+                {
+                    if (!_remoteActive) return false;
+                    Dispatcher.BeginInvoke(new Action(() => SetInputTarget(action == HotkeyAction.SelectRemote)));
+                    return true;
+                });
                 _capture.Start();
                 AddLog("local", "local", "Hooks", "active");
             }
@@ -180,12 +187,12 @@ namespace WinputLan
                 ConnectionStateText.Text = "PAIRING";
                 AddLog("remote", "local", "Pairing", "code-ready");
             });
-            coordinator.PairingCompleted += record => Dispatcher.Invoke(() => CompletePairing(record));
+            coordinator.PairingCompleted += record => Dispatcher.Invoke(() => CompletePairing(record, ReferenceEquals(coordinator, _pairingCoordinator)));
             coordinator.PairingFailed += reason => Dispatcher.Invoke(() => AddLog("remote", "local", "Pairing", "failed"));
             return coordinator;
         }
 
-        private void CompletePairing(PinRecord record)
+        private void CompletePairing(PinRecord record, bool outbound)
         {
             try
             {
@@ -198,6 +205,7 @@ namespace WinputLan
                 ConfirmPairButton.IsEnabled = false;
                 RemoteNameText.Text = "Paired peer";
                 AddLog("local", "remote", "Pairing", "confirmed");
+                if (outbound) _ = RestartListenerAsync();
                 if (!string.IsNullOrWhiteSpace(_config.RemoteAddress))
                 {
                     _reconnectCts?.Cancel();
@@ -208,16 +216,31 @@ namespace WinputLan
             catch { AddLog("local", "remote", "Pairing", "pin-save-failed"); }
         }
 
-        private async Task StartListenerAsync()
+        private async Task RestartListenerAsync()
         {
-            while (_listenerCts != null && !_listenerCts.IsCancellationRequested)
+            await _listenerRestartGate.WaitAsync().ConfigureAwait(true);
+            try
+            {
+                var oldCts = _listenerCts;
+                var oldTask = _listenerTask;
+                if (oldCts != null) oldCts.Cancel();
+                if (oldTask != null) { try { await oldTask.ConfigureAwait(true); } catch (OperationCanceledException) { } }
+                _listenerCts = new CancellationTokenSource();
+                _listenerTask = StartListenerAsync(_listenerCts.Token);
+            }
+            finally { _listenerRestartGate.Release(); }
+        }
+
+        private async Task StartListenerAsync(CancellationToken listenerToken)
+        {
+            while (!listenerToken.IsCancellationRequested)
             {
                 try
                 {
-                    await _listenerTransport.ListenOnceAsync(_config.ListenPort, _certificate, _config.PinnedFingerprint, string.IsNullOrWhiteSpace(_config.PinnedFingerprint), _listenerCts.Token);
+                    await _listenerTransport.ListenOnceAsync(_config.ListenPort, _certificate, _config.PinnedFingerprint, string.IsNullOrWhiteSpace(_config.PinnedFingerprint), listenerToken);
                 }
                 catch (OperationCanceledException) { return; }
-                catch (Exception) { AddLog("remote", "local", "Listener", "failed"); await Task.Delay(500, _listenerCts.Token).ConfigureAwait(false); }
+                catch (Exception) { AddLog("remote", "local", "Listener", "failed"); try { await Task.Delay(500, listenerToken).ConfigureAwait(false); } catch (OperationCanceledException) { return; } }
             }
         }
 

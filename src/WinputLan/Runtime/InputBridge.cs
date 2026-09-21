@@ -33,14 +33,16 @@ namespace WinputLan.Runtime
         private const uint LlkhfInjected = 0x10;
         private const uint LlmhfInjected = 0x01;
         private readonly IInputSink _sink;
+        private readonly IHotkeyChordDetector _hotkeyChordDetector;
+        private readonly Func<HotkeyAction, bool> _hotkeyAction;
+        private readonly HashSet<ushort> _suppressedHotkeyUps = new HashSet<ushort>();
         private NativeMethods.HookProc _keyboardProc;
         private NativeMethods.HookProc _mouseProc;
         private IntPtr _keyboardHook;
         private IntPtr _mouseHook;
         private bool _disposed;
 
-        private readonly Func<InputEvent, bool> _hotkeyBypass;
-        public LowLevelInputCapture(IInputSink sink, Func<InputEvent, bool> hotkeyBypass = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyBypass = hotkeyBypass; }
+        public LowLevelInputCapture(IInputSink sink, IHotkeyChordDetector hotkeyChordDetector = null, Func<HotkeyAction, bool> hotkeyAction = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyChordDetector = hotkeyChordDetector; _hotkeyAction = hotkeyAction; }
 
         public bool Start()
         {
@@ -80,7 +82,15 @@ namespace WinputLan.Runtime
                     if (kind.HasValue)
                     {
                         var value = InputEvent.Key(kind.Value, (ushort)data.VirtualKey, (ushort)data.ScanCode, data.Flags, DateTime.UtcNow.Ticks);
-                        if (_hotkeyBypass != null && _hotkeyBypass(value)) return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+                        HotkeyAction? action;
+                        if (_hotkeyChordDetector != null && _hotkeyChordDetector.TryHandle(value, out action))
+                        {
+                            if (action.HasValue)
+                            {
+                                if (_hotkeyAction != null && _hotkeyAction(action.Value)) { _suppressedHotkeyUps.Add(value.VirtualKey); return (IntPtr)1; }
+                            }
+                            else if (_suppressedHotkeyUps.Remove(value.VirtualKey)) return (IntPtr)1;
+                        }
                         if (_sink.Publish(value)) return (IntPtr)1;
                     }
                 }

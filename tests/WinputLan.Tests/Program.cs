@@ -112,11 +112,19 @@ namespace WinputLan.Tests
         private static void TestHotkeyBypass()
         {
             var bypass = new HotkeyBypassDetector(HotkeyGesture.Parse("Ctrl+Shift+Alt+1"), HotkeyGesture.Parse("Ctrl+Shift+Alt+2"));
-            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, 0x11, 0, 0, 1)), "configured ctrl stays local");
-            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, 0x10, 0, 0, 2)), "configured shift stays local");
-            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, 0x12, 0, 0, 3)), "configured alt stays local");
-            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, (ushort)'2', 0, 0, 4)), "remote chord terminal stays local");
-            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyUp, (ushort)'2', 0, 0, 5)), "terminal key-up stays local exactly once");
+            HotkeyAction? action;
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyDown, 0x11, 0, 0, 1), out action), "ordinary ctrl remains routable");
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyDown, (ushort)'C', 0, 0, 2), out action), "Ctrl+C terminal is not a configured chord");
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyUp, (ushort)'C', 0, 0, 3), out action), "ordinary terminal key-up remains routable");
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyUp, 0x11, 0, 0, 4), out action), "ordinary ctrl key-up remains routable");
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyDown, 0x11, 0, 0, 5), out action), "chord ctrl remains routable before terminal");
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyDown, 0x10, 0, 0, 6), out action), "chord shift remains routable before terminal");
+            Assert(!bypass.TryHandle(InputEvent.Key(InputKind.KeyDown, 0x12, 0, 0, 7), out action), "chord alt remains routable before terminal");
+            var callbacks = 0;
+            Assert(bypass.TryHandle(InputEvent.Key(InputKind.KeyDown, (ushort)'2', 0, 0, 8), out action) && action == HotkeyAction.SelectRemote, "remote chord suppresses only terminal and emits action");
+            if (action.HasValue) callbacks++;
+            Assert(bypass.TryHandle(InputEvent.Key(InputKind.KeyUp, (ushort)'2', 0, 0, 9), out action) && !action.HasValue, "terminal key-up is suppressed coherently");
+            Assert(callbacks == 1, "chord callback emitted exactly once");
         }
 
         private static void TestPointerMapping()
