@@ -13,6 +13,11 @@ namespace WinputLan.Runtime
         bool Publish(InputEvent value);
     }
 
+    public interface IFailSafeInputSink : IInputSink
+    {
+        void ReleaseAll();
+    }
+
     public sealed class LowLevelInputCapture : IDisposable
     {
         private const int WhKeyboardLl = 13;
@@ -89,7 +94,7 @@ namespace WinputLan.Runtime
                     if (message == WmMouseMove) value = InputEvent.MouseMove(data.Point.X, data.Point.Y, DateTime.UtcNow.Ticks);
                     else if (message == WmLButtonDown || message == WmRButtonDown || message == WmMButtonDown) value = InputEvent.MouseButton(InputKind.MouseButtonDown, (uint)message, DateTime.UtcNow.Ticks);
                     else if (message == WmLButtonUp || message == WmRButtonUp || message == WmMButtonUp) value = InputEvent.MouseButton(InputKind.MouseButtonUp, (uint)message, DateTime.UtcNow.Ticks);
-                    else if (message == WmMouseWheel) value = InputEvent.MouseButton(InputKind.MouseWheel, data.MouseData, DateTime.UtcNow.Ticks);
+                    else if (message == WmMouseWheel) value = InputEvent.MouseWheel(unchecked((short)(data.MouseData >> 16)), DateTime.UtcNow.Ticks);
                     if (value != null && _sink.Publish(value)) return (IntPtr)1;
                 }
             }
@@ -97,7 +102,7 @@ namespace WinputLan.Runtime
         }
     }
 
-    public sealed class SendInputSink : IInputSink
+    public sealed class SendInputSink : IFailSafeInputSink
     {
         public const long InputTag = 0x57494E505554;
         private readonly HashSet<ushort> _pressedKeys = new HashSet<ushort>();
@@ -111,7 +116,6 @@ namespace WinputLan.Runtime
             if (value.Kind == InputKind.KeyDown || value.Kind == InputKind.KeyUp)
             {
                 input.Data.Keyboard = new NativeMethods.KEYBDINPUT { Vk = value.VirtualKey, Scan = value.ScanCode, Flags = value.Kind == InputKind.KeyUp ? NativeMethods.KeyEventKeyUp : 0, Time = 0, ExtraInfo = new IntPtr(InputTag) };
-                lock (_gate) { if (value.Kind == InputKind.KeyDown) _pressedKeys.Add(value.VirtualKey); else _pressedKeys.Remove(value.VirtualKey); }
             }
             else
             {
@@ -127,11 +131,18 @@ namespace WinputLan.Runtime
                 }
                 if (value.Kind == InputKind.MouseButtonDown) flags |= MouseButtonFlags(value.Flags, true);
                 if (value.Kind == InputKind.MouseButtonUp) flags |= MouseButtonFlags(value.Flags, false);
-                if (value.Kind == InputKind.MouseWheel) { flags = NativeMethods.MouseEventWheel; input.Data.Mouse.MouseData = value.MouseData; }
-                input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = dx, Dy = dy, MouseData = value.MouseData, Flags = flags, Time = 0, ExtraInfo = new IntPtr(InputTag) };
+                if (value.Kind == InputKind.MouseWheel) { flags = NativeMethods.MouseEventWheel; }
+                input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = dx, Dy = dy, MouseData = value.Kind == InputKind.MouseWheel ? unchecked((uint)(short)value.MouseData) : value.MouseData, Flags = flags, Time = 0, ExtraInfo = new IntPtr(InputTag) };
             }
-            NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf(typeof(NativeMethods.INPUT)));
-            return false;
+            uint sent;
+            try { sent = NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf(typeof(NativeMethods.INPUT))); }
+            catch { return false; }
+            if (sent != 1) return false;
+            if (value.Kind == InputKind.KeyDown || value.Kind == InputKind.KeyUp)
+            {
+                lock (_gate) { if (value.Kind == InputKind.KeyDown) _pressedKeys.Add(value.VirtualKey); else _pressedKeys.Remove(value.VirtualKey); }
+            }
+            return true;
         }
 
         public void ReleaseAll()

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
@@ -26,10 +28,13 @@ namespace WinputLan
         private PeerTransport _listenerTransport;
         private PairingCoordinator _pairingCoordinator;
         private PairingCoordinator _listenerPairingCoordinator;
+        private PairingCoordinator _confirmationCoordinator;
         private CancellationTokenSource _listenerCts;
         private CancellationTokenSource _reconnectCts;
         private PinStore _pinStore;
         private InputRouter _inputRouter;
+        private PairedInputReceiver _inputReceiver;
+        private PairedInputReceiver _listenerInputReceiver;
         private CertificateManager _certificateManager;
         private X509Certificate2 _certificate;
         private GlobalHotkeyService _hotkeys;
@@ -79,6 +84,11 @@ namespace WinputLan
                 _listenerCts = new CancellationTokenSource();
                 _ = StartListenerAsync();
                 _inputRouter = new InputRouter(_inputQueue, _transport, _inputSink);
+                _inputReceiver = new PairedInputReceiver(_transport, _inputSink);
+                _listenerInputReceiver = new PairedInputReceiver(_listenerTransport, _inputSink);
+                _inputRouter.InputAudited += AuditInput;
+                _inputReceiver.InputAudited += AuditInput;
+                _listenerInputReceiver.InputAudited += AuditInput;
                 _capture = new LowLevelInputCapture(_inputRouter);
                 _capture.Start();
                 AddLog("local", "local", "Hooks", "active");
@@ -94,6 +104,8 @@ namespace WinputLan
         {
             _capture?.Dispose();
             _inputRouter?.Dispose();
+            _inputReceiver?.Dispose();
+            _listenerInputReceiver?.Dispose();
             _inputSink.ReleaseAll();
             _pairingCoordinator?.Dispose();
             _listenerPairingCoordinator?.Dispose();
@@ -134,12 +146,12 @@ namespace WinputLan
         }
         private void PairingButton_Click(object sender, RoutedEventArgs e) { BeginPairing(); }
         private void MachinesButton_Click(object sender, RoutedEventArgs e) { SetInputTarget(false); }
-        private void ShortcutsButton_Click(object sender, RoutedEventArgs e) { MessageBox.Show("Local: " + _config.LocalHotkey + "\nRemote: " + _config.RemoteHotkey + "\n\nEdit these values in the per-user config file:\n" + _configStore.Path, "Shortcuts", MessageBoxButton.OK, MessageBoxImage.Information); }
-        private void UpdatesButton_Click(object sender, RoutedEventArgs e) { MessageBox.Show("Updates are checked only when you request them. GitHub manifest, SHA-256 and Authenticode are required before installation.", "Updates", MessageBoxButton.OK, MessageBoxImage.Information); }
+        private void ShortcutsButton_Click(object sender, RoutedEventArgs e) { ShowShortcutsEditor(); }
+        private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(); }
         private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); RefreshLog(); }
         private void ConfirmPairButton_Click(object sender, RoutedEventArgs e)
         {
-            try { _pairingCoordinator?.ConfirmLocal(_pairingCoordinator.CurrentCode); }
+            try { _confirmationCoordinator?.ConfirmLocal(_confirmationCoordinator.CurrentCode); }
             catch (Exception ex) { MessageBox.Show(ex.Message, "Pairing", MessageBoxButton.OK, MessageBoxImage.Warning); }
         }
         private void HowPairingButton_Click(object sender, RoutedEventArgs e) { MessageBox.Show("Both PCs create a TLS transcript, display the same six-digit SAS, and require bilateral confirmation. The SAS is never sent. The resulting peer certificate is pinned and protected by Windows DPAPI.", "Pairing", MessageBoxButton.OK, MessageBoxImage.Information); }
@@ -158,6 +170,7 @@ namespace WinputLan
             var coordinator = new PairingCoordinator(transport, _config, _certificate);
             coordinator.CodeReady += code => Dispatcher.Invoke(() =>
             {
+                _confirmationCoordinator = coordinator;
                 PairCodeText.Text = code.Substring(0, 3) + " " + code.Substring(3);
                 PairCodeStateText.Text = "Verify this code on the other PC";
                 ConfirmPairButton.IsEnabled = true;
@@ -194,12 +207,15 @@ namespace WinputLan
 
         private async Task StartListenerAsync()
         {
-            try
+            while (_listenerCts != null && !_listenerCts.IsCancellationRequested)
             {
-                await _listenerTransport.ListenOnceAsync(_config.ListenPort, _certificate, _config.PinnedFingerprint, string.IsNullOrWhiteSpace(_config.PinnedFingerprint), _listenerCts.Token);
+                try
+                {
+                    await _listenerTransport.ListenOnceAsync(_config.ListenPort, _certificate, _config.PinnedFingerprint, string.IsNullOrWhiteSpace(_config.PinnedFingerprint), _listenerCts.Token);
+                }
+                catch (OperationCanceledException) { return; }
+                catch (Exception) { AddLog("remote", "local", "Listener", "failed"); await Task.Delay(500, _listenerCts.Token).ConfigureAwait(false); }
             }
-            catch (OperationCanceledException) { }
-            catch (Exception) { AddLog("remote", "local", "Listener", "failed"); }
         }
 
         private async Task MonitorReconnectAsync(string host, int port, CancellationToken cancellationToken)
@@ -253,11 +269,68 @@ namespace WinputLan
             RefreshLog();
         }
 
+        private void AuditInput(InputKind kind, string status)
+        {
+            Dispatcher.BeginInvoke(new Action(() => AddLog("local", "remote", "Input." + kind, status)));
+        }
+
         private void RefreshLog()
         {
             _logLines.Clear();
             foreach (var entry in _transactionLog.Snapshot().Reverse().Select(e => e.ToString())) _logLines.Add(entry);
             LogStatusText.Text = _logLines.Count + " events this session";
+        }
+
+        private void ShowShortcutsEditor()
+        {
+            var local = new System.Windows.Controls.TextBox { Text = _config.LocalHotkey, Margin = new Thickness(0, 5, 0, 10) };
+            var remote = new System.Windows.Controls.TextBox { Text = _config.RemoteHotkey, Margin = new Thickness(0, 5, 0, 12) };
+            System.Windows.Automation.AutomationProperties.SetName(local, "Local input shortcut");
+            System.Windows.Automation.AutomationProperties.SetName(remote, "Remote input shortcut");
+            var save = new System.Windows.Controls.Button { Content = "Save shortcuts", IsDefault = true, MinWidth = 120, HorizontalAlignment = HorizontalAlignment.Right };
+            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(22), Width = 330 };
+            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "LOCAL INPUT", FontWeight = FontWeights.SemiBold }); panel.Children.Add(local);
+            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "REMOTE INPUT", FontWeight = FontWeights.SemiBold }); panel.Children.Add(remote); panel.Children.Add(save);
+            var dialog = new Window { Title = "Shortcuts", Content = panel, Owner = this, SizeToContent = SizeToContent.WidthAndHeight, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize };
+            save.Click += (s, args) =>
+            {
+                try
+                {
+                    var localGesture = HotkeyGesture.Parse(local.Text);
+                    var remoteGesture = HotkeyGesture.Parse(remote.Text);
+                    if (_hotkeys == null || !_hotkeys.Replace(localGesture, remoteGesture)) throw new InvalidOperationException("Windows could not register one of these global shortcuts.");
+                    _config.LocalHotkey = localGesture.ToString(); _config.RemoteHotkey = remoteGesture.ToString();
+                    _configStore.Save(_config); AddLog("local", "local", "Hotkeys", "saved-reregistered"); dialog.DialogResult = true;
+                }
+                catch (Exception ex) { MessageBox.Show(ex.Message, "Shortcuts", MessageBoxButton.OK, MessageBoxImage.Warning); }
+            };
+            dialog.ShowDialog();
+        }
+
+        private async Task CheckUpdatesAsync()
+        {
+            UpdatesButton.IsEnabled = false; UpdatesButton.Content = "Updates · checking…";
+            try
+            {
+                using (var http = new HttpClient())
+                {
+                    var updater = new GitHubUpdater(http, new WindowsAuthenticodeVerifier());
+                    var manifest = await updater.ReadManifestAsync(new Uri("https://github.com/luingry/WinputLan/releases/latest/download/update-manifest.json"), CancellationToken.None);
+                    string reason;
+                    if (!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason))
+                    {
+                        UpdatesButton.Content = "Updates · up to date"; AddLog("github", "local", "Update", "no-update");
+                        MessageBox.Show("No newer signed update is available.\n\n" + reason, "Updates", MessageBoxButton.OK, MessageBoxImage.Information); return;
+                    }
+                    UpdatesButton.Content = "Updates · downloading…";
+                    var installer = await updater.DownloadAndValidateAsync(manifest, "0.1.0", Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), CancellationToken.None);
+                    UpdatesButton.Content = "Updates · ready"; AddLog("github", "local", "Update", "validated");
+                    if (MessageBox.Show("A signed update " + manifest.Version + " is ready. Start its installer now?", "Updates", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                        Process.Start(new ProcessStartInfo(installer) { UseShellExecute = true });
+                }
+            }
+            catch (Exception ex) { UpdatesButton.Content = "Updates · error"; AddLog("github", "local", "Update", "error"); MessageBox.Show("Update check failed safely. No installer was started.\n\n" + ex.Message, "Updates", MessageBoxButton.OK, MessageBoxImage.Warning); }
+            finally { UpdatesButton.IsEnabled = true; }
         }
 
     }

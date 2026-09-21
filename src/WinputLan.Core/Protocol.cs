@@ -68,6 +68,11 @@ namespace WinputLan.Core
             if (kind != InputKind.MouseButtonDown && kind != InputKind.MouseButtonUp && kind != InputKind.MouseWheel) throw new ArgumentException("Invalid mouse button event.", "kind");
             return new InputEvent { Kind = kind, Flags = flags, TimestampUtcTicks = timestampUtcTicks };
         }
+
+        public static InputEvent MouseWheel(short delta, long timestampUtcTicks)
+        {
+            return new InputEvent { Kind = InputKind.MouseWheel, MouseData = unchecked((ushort)delta), TimestampUtcTicks = timestampUtcTicks };
+        }
     }
 
     public static class ProtocolConstants

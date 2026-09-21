@@ -48,3 +48,10 @@
 - Root cause: host validation did not require the exact GitHub host or a dot-delimited subdomain.
 - Resolution: allow only `github.com`/`githubusercontent.com` and their dot-delimited subdomains; add a regression test.
 - Prevention: updater manifest tests include a lookalike host case.
+
+## 2026-09-21 - Input fail-safe abstraction
+
+- Symptom: broadening the router sink seam for receiver tests left cleanup coupled to `SendInputSink`.
+- Root cause: the cleanup method was not represented by the sink contract.
+- Resolution: added `IFailSafeInputSink`; physical injection implements it and test sinks remain side-effect free.
+- Prevention: transport-loss tests cover both queue deactivation and the fail-safe capability.

@@ -73,7 +73,7 @@ namespace WinputLan.Runtime
             _helloSent = true;
             var payload = string.Join("|", _config.DeviceId, CertificateManager.Fingerprint(_certificate), Convert.ToBase64String(_localNonce));
             try { await _transport.SendAsync(FrameType.Hello, Encoding.UTF8.GetBytes(payload), _cts.Token).ConfigureAwait(false); }
-            catch (Exception ex) { PairingFailed?.Invoke(ex.Message); }
+            catch (Exception ex) { Fail(ex.Message); }
         }
 
         private void Transport_FrameReceived(Frame frame)
@@ -83,7 +83,7 @@ namespace WinputLan.Runtime
                 if (frame.Type == FrameType.Hello) HandleHello(Encoding.UTF8.GetString(frame.Payload));
                 else if (frame.Type == FrameType.PairingConfirm) HandleRemoteConfirmation(Encoding.UTF8.GetString(frame.Payload));
             }
-            catch (Exception ex) { PairingFailed?.Invoke(ex.Message); }
+            catch (Exception ex) { Fail(ex.Message); }
         }
 
         private void HandleHello(string payload)
@@ -91,8 +91,11 @@ namespace WinputLan.Runtime
             var parts = payload.Split('|');
             if (parts.Length != 3 || string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1])) throw new InvalidDataException("Pairing hello is invalid.");
             var remoteNonce = Convert.FromBase64String(parts[2]);
+            var observed = _transport.ObservedRemoteFingerprint;
+            if (string.IsNullOrWhiteSpace(observed) || !string.Equals(parts[1], observed, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Pairing hello certificate fingerprint does not match the TLS peer certificate.");
             _remoteDeviceId = parts[0];
-            _remoteFingerprint = parts[1];
+            _remoteFingerprint = observed;
             _transcript = new PairingTranscript(_config.DeviceId, _remoteDeviceId, CertificateManager.Fingerprint(_certificate), _remoteFingerprint, _localNonce, remoteNonce);
             _confirmation = new PairingConfirmation(_transcript);
             CodeReady?.Invoke(_transcript.SasCode());
@@ -118,6 +121,12 @@ namespace WinputLan.Runtime
             _completed = true;
             _transport.MarkPaired();
             PairingCompleted?.Invoke(new PinRecord { DeviceId = _remoteDeviceId, CertificateFingerprint = _remoteFingerprint, TranscriptDigest = Convert.ToBase64String(_transcript.Digest()), CreatedUtc = DateTime.UtcNow });
+        }
+
+        private void Fail(string reason)
+        {
+            if (!_completed) PairingFailed?.Invoke(reason);
+            _transport.Disconnect("pairing failed");
         }
     }
 }

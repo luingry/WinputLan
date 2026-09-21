@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.IO;
 using System.Net;
 using System.Net.Security;
@@ -18,19 +17,34 @@ namespace WinputLan.Runtime
     {
         private readonly object _gate = new object();
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
+        private readonly TimeSpan _heartbeatInterval;
+        private readonly TimeSpan _heartbeatTimeout;
+        private readonly bool _respondToHeartbeats;
         private TcpClient _client;
         private SslStream _stream;
         private CancellationTokenSource _connectionCts;
         private long _sequence;
+        private long _generation;
         private ulong _lastReceivedSequence;
+        private DateTime _lastHeartbeatAckUtc;
         private bool _disposed;
+
+        public PeerTransport() : this(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), true) { }
+        public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout) : this(heartbeatInterval, heartbeatTimeout, true) { }
+        public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout, bool respondToHeartbeats)
+        {
+            if (heartbeatInterval <= TimeSpan.Zero || heartbeatTimeout <= heartbeatInterval) throw new ArgumentOutOfRangeException("heartbeatInterval");
+            _heartbeatInterval = heartbeatInterval;
+            _heartbeatTimeout = heartbeatTimeout;
+            _respondToHeartbeats = respondToHeartbeats;
+            SetState(PeerConnectionState.Offline, "Aguardando destino");
+        }
 
         public PeerConnectionState State { get; private set; }
         public string StateDetail { get; private set; }
+        public string ObservedRemoteFingerprint { get; private set; }
         public event Action<Frame> FrameReceived;
         public event Action<PeerConnectionState, string> StateChanged;
-
-        public PeerTransport() { SetState(PeerConnectionState.Offline, "Aguardando destino"); }
 
         public async Task ConnectAsync(string host, int port, X509Certificate2 localCertificate, string pinnedFingerprint, bool pairingMode, CancellationToken cancellationToken)
         {
@@ -43,27 +57,18 @@ namespace WinputLan.Runtime
             {
                 await client.ConnectAsync(host, port).ConfigureAwait(false);
                 var stream = new SslStream(client.GetStream(), false, (sender, certificate, chain, errors) => ValidateCertificate(certificate, pinnedFingerprint, pairingMode));
-                var clientCertificates = new X509CertificateCollection { localCertificate };
-                await stream.AuthenticateAsClientAsync(host, clientCertificates, SslProtocols.Tls12, false).ConfigureAwait(false);
-                lock (_gate)
-                {
-                    _client = client;
-                    _stream = stream;
-                    _connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    _lastReceivedSequence = 0;
-                }
-                SetState(pairingMode ? PeerConnectionState.Pairing : PeerConnectionState.Connected, "TLS ativo");
-                _ = Task.Run(() => RunHeartbeatAsync(_connectionCts.Token));
-                _ = Task.Run(() => ReceiveLoopAsync(_connectionCts.Token));
+                await stream.AuthenticateAsClientAsync(host, new X509CertificateCollection { localCertificate }, SslProtocols.Tls12, false).ConfigureAwait(false);
+                StartConnection(client, stream, pairingMode, cancellationToken, true);
             }
-            catch (Exception ex) when (ex is IOException || ex is SocketException || ex is AuthenticationException || ex is InvalidDataException || ex is OperationCanceledException)
+            catch
             {
-                SetState(PeerConnectionState.Reconnecting, "Conexão perdida");
                 CloseTransport(client);
+                SetState(PeerConnectionState.Reconnecting, "Conexão perdida");
                 throw;
             }
         }
 
+        // Occupies the call while its accepted peer is alive, allowing a caller to restart listening safely.
         public async Task ListenOnceAsync(int port, X509Certificate2 localCertificate, string pinnedFingerprint, bool pairingMode, CancellationToken cancellationToken)
         {
             var listener = new TcpListener(IPAddress.Any, port);
@@ -78,16 +83,10 @@ namespace WinputLan.Runtime
                 client.NoDelay = true;
                 var stream = new SslStream(client.GetStream(), false, (sender, certificate, chain, errors) => ValidateCertificate(certificate, pinnedFingerprint, pairingMode));
                 await stream.AuthenticateAsServerAsync(localCertificate, true, SslProtocols.Tls12, false).ConfigureAwait(false);
-                lock (_gate)
-                {
-                    _client = client;
-                    _stream = stream;
-                    _connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    _lastReceivedSequence = 0;
-                }
-                SetState(pairingMode ? PeerConnectionState.Pairing : PeerConnectionState.Connected, "TLS ativo");
-                _ = Task.Run(() => RunHeartbeatAsync(_connectionCts.Token));
-                _ = Task.Run(() => ReceiveLoopAsync(_connectionCts.Token));
+                var generation = StartConnection(client, stream, pairingMode, cancellationToken, false);
+                CancellationToken receiveToken;
+                lock (_gate) receiveToken = _connectionCts.Token;
+                await ReceiveLoopAsync(stream, generation, receiveToken).ConfigureAwait(false);
             }
             finally { listener.Stop(); }
         }
@@ -103,26 +102,18 @@ namespace WinputLan.Runtime
             finally { _sendGate.Release(); }
         }
 
-        public async Task RunHeartbeatAsync(CancellationToken cancellationToken)
-        {
-            while (!cancellationToken.IsCancellationRequested)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken).ConfigureAwait(false);
-                try { await SendAsync(FrameType.Heartbeat, new byte[0], cancellationToken).ConfigureAwait(false); }
-                catch { return; }
-            }
-        }
-
-        public void MarkPaired()
-        {
-            if (State == PeerConnectionState.Pairing) SetState(PeerConnectionState.Connected, "TLS ativo · peer pinned");
-        }
+        public void MarkPaired() { if (State == PeerConnectionState.Pairing) SetState(PeerConnectionState.Connected, "TLS ativo · peer pinned"); }
 
         public void Disconnect(string reason)
         {
-            CancellationTokenSource cts;
             TcpClient client;
-            lock (_gate) { cts = _connectionCts; client = _client; _connectionCts = null; _client = null; _stream = null; }
+            CancellationTokenSource cts;
+            lock (_gate)
+            {
+                _generation++;
+                client = _client; cts = _connectionCts;
+                _client = null; _stream = null; _connectionCts = null; ObservedRemoteFingerprint = null;
+            }
             if (cts != null) cts.Cancel();
             CloseTransport(client);
             SetState(PeerConnectionState.Offline, reason ?? "desconectado");
@@ -136,29 +127,82 @@ namespace WinputLan.Runtime
             _sendGate.Dispose();
         }
 
-        private async Task ReceiveLoopAsync(CancellationToken cancellationToken)
+        private long StartConnection(TcpClient client, SslStream stream, bool pairingMode, CancellationToken cancellationToken, bool receiveInBackground)
         {
-            SslStream stream;
-            lock (_gate) stream = _stream;
+            if (stream.RemoteCertificate == null) throw new AuthenticationException("TLS peer did not present a certificate.");
+            var observed = CertificateManager.Fingerprint(new X509Certificate2(stream.RemoteCertificate));
+            long generation;
+            lock (_gate)
+            {
+                _client = client; _stream = stream;
+                _connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                _lastReceivedSequence = 0; _lastHeartbeatAckUtc = DateTime.UtcNow;
+                ObservedRemoteFingerprint = observed; generation = ++_generation;
+            }
+            SetState(pairingMode ? PeerConnectionState.Pairing : PeerConnectionState.Connected, "TLS ativo");
+            var token = _connectionCts.Token;
+            _ = Task.Run(() => RunHeartbeatAsync(generation, token));
+            if (receiveInBackground) _ = Task.Run(() => ReceiveLoopAsync(stream, generation, token));
+            return generation;
+        }
+
+        private async Task RunHeartbeatAsync(long generation, CancellationToken cancellationToken)
+        {
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    await Task.Delay(_heartbeatInterval, cancellationToken).ConfigureAwait(false);
+                    DateTime lastAck;
+                    lock (_gate) { if (generation != _generation) return; lastAck = _lastHeartbeatAckUtc; }
+                    if (DateTime.UtcNow - lastAck > _heartbeatTimeout) { EndGeneration(generation, "heartbeat timeout", true); return; }
+                    await SendAsync(FrameType.Heartbeat, new byte[0], cancellationToken).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch { EndGeneration(generation, "heartbeat send failed", true); }
+        }
+
+        private async Task ReceiveLoopAsync(SslStream stream, long generation, CancellationToken cancellationToken)
+        {
             try
             {
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     var frame = FrameCodec.Read(stream);
-                    if (frame.Sequence <= _lastReceivedSequence) throw new InvalidDataException("Frame sequence is not strictly increasing.");
-                    _lastReceivedSequence = frame.Sequence;
-                    if (frame.Type == FrameType.Heartbeat) await SendAsync(FrameType.HeartbeatAck, new byte[0], cancellationToken).ConfigureAwait(false);
+                    lock (_gate)
+                    {
+                        if (generation != _generation) return;
+                        if (frame.Sequence <= _lastReceivedSequence) throw new InvalidDataException("Frame sequence is not strictly increasing.");
+                        _lastReceivedSequence = frame.Sequence;
+                    }
+                    if (frame.Type == FrameType.Heartbeat && _respondToHeartbeats) await SendAsync(FrameType.HeartbeatAck, new byte[0], cancellationToken).ConfigureAwait(false);
+                    else if (frame.Type == FrameType.HeartbeatAck) { lock (_gate) if (generation == _generation) _lastHeartbeatAckUtc = DateTime.UtcNow; }
                     else FrameReceived?.Invoke(frame);
                 }
             }
             catch (Exception ex) when (ex is IOException || ex is InvalidDataException || ex is AuthenticationException || ex is SocketException || ex is ObjectDisposedException)
             {
-                if (!cancellationToken.IsCancellationRequested && !(ex is EndOfStreamException)) SetState(PeerConnectionState.Faulted, ex.Message);
+                if (!cancellationToken.IsCancellationRequested) EndGeneration(generation, ex is EndOfStreamException ? "peer closed" : ex.Message, true);
             }
-            finally
+            finally { EndGeneration(generation, "peer closed", false); }
+        }
+
+        private void EndGeneration(long generation, string detail, bool faulted)
+        {
+            TcpClient client = null;
+            CancellationTokenSource cts = null;
+            lock (_gate)
             {
-                Disconnect("peer closed");
+                if (generation != _generation) return;
+                _generation++;
+                client = _client; cts = _connectionCts;
+                _client = null; _stream = null; _connectionCts = null; ObservedRemoteFingerprint = null;
             }
+            if (cts != null) cts.Cancel();
+            CloseTransport(client);
+            if (faulted) SetState(PeerConnectionState.Faulted, detail);
+            SetState(PeerConnectionState.Offline, detail);
         }
 
         private static bool ValidateCertificate(X509Certificate certificate, string pinnedFingerprint, bool pairingMode)
@@ -169,16 +213,7 @@ namespace WinputLan.Runtime
             using (var cert = new X509Certificate2(certificate)) return string.Equals(CertificateManager.Fingerprint(cert), pinnedFingerprint, StringComparison.OrdinalIgnoreCase);
         }
 
-        private void SetState(PeerConnectionState state, string detail)
-        {
-            State = state;
-            StateDetail = detail;
-            StateChanged?.Invoke(state, detail);
-        }
-
-        private static void CloseTransport(TcpClient client)
-        {
-            try { if (client != null) client.Close(); } catch { }
-        }
+        private void SetState(PeerConnectionState state, string detail) { State = state; StateDetail = detail; StateChanged?.Invoke(state, detail); }
+        private static void CloseTransport(TcpClient client) { try { if (client != null) client.Close(); } catch { } }
     }
 }

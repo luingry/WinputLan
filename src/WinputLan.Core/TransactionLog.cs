@@ -57,6 +57,8 @@ namespace WinputLan.Core
         private static string SafeToken(string value)
         {
             if (string.IsNullOrWhiteSpace(value)) return "-";
+            var lowered = value.ToLowerInvariant();
+            if (lowered.Contains("keycode") || lowered.Contains("scancode") || lowered.Contains("payload") || lowered.Contains("text") || lowered.Contains("typed")) return "redacted";
             var chars = value.Where(c => !char.IsControl(c) && c != '\r' && c != '\n').ToArray();
             return new string(chars).Trim();
         }

@@ -29,6 +29,25 @@ namespace WinputLan.Runtime
             return true;
         }
 
+        public bool Replace(HotkeyGesture local, HotkeyGesture remote)
+        {
+            HotkeyValidator.Validate(local);
+            HotkeyValidator.Validate(remote);
+            var localId = _nextId++;
+            var remoteId = _nextId++;
+            if (!NativeMethodsHotkey.RegisterHotKey(_source.Handle, localId, ToNativeModifiers(local.Modifiers), local.VirtualKey)) return false;
+            if (!NativeMethodsHotkey.RegisterHotKey(_source.Handle, remoteId, ToNativeModifiers(remote.Modifiers), remote.VirtualKey))
+            {
+                NativeMethodsHotkey.UnregisterHotKey(_source.Handle, localId);
+                return false;
+            }
+            foreach (var id in _bindings.Keys) NativeMethodsHotkey.UnregisterHotKey(_source.Handle, id);
+            _bindings.Clear();
+            _bindings[localId] = HotkeyAction.SelectLocal;
+            _bindings[remoteId] = HotkeyAction.SelectRemote;
+            return true;
+        }
+
         public void Dispose()
         {
             if (_disposed) return;

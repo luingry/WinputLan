@@ -27,7 +27,14 @@ jobs:
         run: ./scripts/build.ps1 -Configuration Release
       - name: Package portable payload
         shell: pwsh
-        run: ./scripts/finalize.ps1 -Configuration Release
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) { throw 'Signing secrets are required; release fails closed.' }
+          $certificate = Join-Path $env:RUNNER_TEMP 'winputlan-signing.pfx'
+          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
+          ./scripts/finalize.ps1 -Configuration Release -CertificatePath $certificate -CertificatePassword $env:SIGNING_PFX_PASSWORD
       - name: Release notes
         shell: pwsh
         run: ./scripts/release-notes.ps1 | Set-Content artifacts/release-notes.md -Encoding UTF8
@@ -37,4 +44,5 @@ jobs:
           body_path: artifacts/release-notes.md
           files: |
             artifacts/WinputLan-*/**
+            artifacts/installer/WinputLan-*-setup.exe
           fail_on_unmatched_files: true

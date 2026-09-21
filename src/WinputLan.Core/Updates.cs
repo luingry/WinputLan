@@ -57,6 +57,7 @@ namespace WinputLan.Core
             if (available <= current) { reason = "Manifest is not newer than the installed version."; return false; }
             if (string.IsNullOrWhiteSpace(manifest.AssetName) || manifest.AssetName.IndexOfAny(new[] { '\\', '/', ':', '\r', '\n' }) >= 0) { reason = "Asset name is not a file name."; return false; }
             if (string.IsNullOrWhiteSpace(manifest.AssetUrl) || !Uri.TryCreate(manifest.AssetUrl, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps || !IsGitHubHost(uri.Host)) { reason = "Asset URL must be an HTTPS GitHub URL."; return false; }
+            if (!uri.AbsolutePath.EndsWith("/" + Uri.EscapeDataString(manifest.AssetName), StringComparison.Ordinal)) { reason = "Asset URL does not match the declared asset name."; return false; }
             if (!Regex.IsMatch(manifest.Sha256 ?? string.Empty, "^[0-9a-fA-F]{64}$")) { reason = "SHA-256 is missing or malformed."; return false; }
             if (manifest.AuthenticodeRequired == false) { reason = "Manifest must require Authenticode."; return false; }
             return true;

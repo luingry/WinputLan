@@ -14,6 +14,7 @@ namespace WinputLan.Tests
         private static void Main()
         {
             Run("frame round-trip and bounds", TestFrames);
+            Run("wheel delta wire preservation", TestWheel);
             Run("pairing transcript, SAS and HKDF", TestPairing);
             Run("pin store abstraction", TestPins);
             Run("queue coalescing and order", TestQueue);
@@ -64,6 +65,13 @@ namespace WinputLan.Tests
             Assert(confirm.IsComplete, "bilateral confirmation");
         }
 
+        private static void TestWheel()
+        {
+            var wheel = InputEvent.MouseWheel(-120, DateTime.UtcNow.Ticks);
+            var decoded = FrameCodec.DecodeInput(FrameCodec.EncodeInput(wheel));
+            Assert(decoded.Kind == InputKind.MouseWheel && unchecked((short)decoded.MouseData) == -120, "wheel delta survives the wire record");
+        }
+
         private static void TestPins()
         {
             var protector = new TestProtector();
@@ -107,6 +115,8 @@ namespace WinputLan.Tests
             log.Add("local", "remote", "Heartbeat", "ok");
             var entries = log.Snapshot();
             Assert(entries.Count == 2 && entries.All(e => !e.ToString().Contains("payload") && !e.ToString().Contains("typed")), "bounded privacy log");
+            log.Add("local", "remote", "Input.KeyDown", "keycode=65 payload=secret");
+            Assert(log.Snapshot().Last().Status == "redacted", "input metadata log redacts content-bearing fields");
         }
 
         private static void TestConfig()
@@ -126,6 +136,11 @@ namespace WinputLan.Tests
             string reason;
             var manifest = new ReleaseManifest { Version = "0.1.1", AssetName = "WinputLan-0.1.1-setup.exe", AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/WinputLan-0.1.1-setup.exe", Sha256 = new string('a', 64), AuthenticodeRequired = true };
             Assert(ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), reason);
+            manifest.AssetName = "WinputLan-0.1.1-setup.exe";
+            Assert(ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "setup manifest accepted");
+            manifest.AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/other-setup.exe";
+            Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "asset URL/name mismatch rejected");
+            manifest.AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/WinputLan-0.1.1-setup.exe";
             manifest.AssetUrl = "http://example.com/file.exe";
             Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "non-GitHub URL rejected");
             manifest.AssetUrl = "https://attackergithub.com/file.exe";

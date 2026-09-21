@@ -39,6 +39,10 @@ namespace WinputLan.Loopback
                 using (var serverPairing = new PairingCoordinator(server, serverConfig, serverCertificate))
                 using (var clientPairing = new PairingCoordinator(client, clientConfig, clientCertificate))
                 {
+                    var sink = new RecordingSink();
+                    using (var receiver = new PairedInputReceiver(server, sink))
+                    {
+                    receiver.InputAudited += (kind, status) => Console.WriteLine("receiver=" + kind + ":" + status + " state=" + server.State);
                     Console.WriteLine("stage=coordinators");
                     server.StateChanged += (state, detail) => Console.WriteLine("server-state=" + state + " detail=" + detail);
                     client.StateChanged += (state, detail) => Console.WriteLine("client-state=" + state + " detail=" + detail);
@@ -63,6 +67,9 @@ namespace WinputLan.Loopback
                     if (await Task.WhenAny(connectTask, Task.Delay(5000, cancellation.Token)).ConfigureAwait(false) != connectTask) throw new TimeoutException("TLS client connect timed out.");
                     await connectTask.ConfigureAwait(false);
                     Console.WriteLine("stage=connected");
+                    await client.SendAsync(FrameType.Input, FrameCodec.EncodeInput(InputEvent.Key(InputKind.KeyDown, 0x42, 0x30, 0, DateTime.UtcNow.Ticks)), cancellation.Token).ConfigureAwait(false);
+                    await Task.Delay(100, cancellation.Token).ConfigureAwait(false);
+                    if (sink.Count != 0) throw new InvalidOperationException("Input was accepted before bilateral pairing.");
                     var codes = await WaitForCodesAsync(serverCode.Task, clientCode.Task, cancellation.Token).ConfigureAwait(false);
                     Console.WriteLine("stage=codes");
                     if (codes[0] != codes[1]) throw new InvalidOperationException("SAS mismatch across loopback peers.");
@@ -71,14 +78,23 @@ namespace WinputLan.Loopback
                     var records = await WaitForPinsAsync(serverComplete.Task, clientComplete.Task, cancellation.Token).ConfigureAwait(false);
                     Console.WriteLine("stage=paired");
                     if (records.Any(r => r == null || string.IsNullOrWhiteSpace(r.CertificateFingerprint))) throw new InvalidOperationException("Pin record missing after bilateral confirmation.");
-                    var received = new TaskCompletionSource<InputEvent>();
-                    server.FrameReceived += frame => { if (frame.Type == FrameType.Input) received.TrySetResult(FrameCodec.DecodeInput(frame.Payload)); };
                     await client.SendAsync(FrameType.Input, FrameCodec.EncodeInput(InputEvent.Key(InputKind.KeyDown, 0x41, 0x1E, 0, DateTime.UtcNow.Ticks)), cancellation.Token).ConfigureAwait(false);
-                    var input = await received.Task.ConfigureAwait(false);
-                    if (input.Kind != InputKind.KeyDown || input.VirtualKey != 0x41) throw new InvalidOperationException("Synthetic input frame did not round-trip.");
-                    server.Disconnect("loopback complete");
+                    await sink.WaitForCountAsync(1, cancellation.Token).ConfigureAwait(false);
+                    if (sink.Last.Kind != InputKind.KeyDown || sink.Last.VirtualKey != 0x41) throw new InvalidOperationException("Paired receiver did not publish synthetic input.");
+                    await client.SendAsync(FrameType.Hello, System.Text.Encoding.UTF8.GetBytes(clientConfig.DeviceId + "|" + new string('0', 64) + "|" + Convert.ToBase64String(new byte[32])), cancellation.Token).ConfigureAwait(false);
+                    await WaitForOfflineAsync(server, cancellation.Token).ConfigureAwait(false);
                     await listenTask.ConfigureAwait(false);
+                    var restartListen = server.ListenOnceAsync(serverConfig.ListenPort, serverCertificate, CertificateManager.Fingerprint(clientCertificate), false, cancellation.Token);
+                    await Task.Delay(100, cancellation.Token).ConfigureAwait(false);
+                    await client.ConnectAsync("127.0.0.1", serverConfig.ListenPort, clientCertificate, CertificateManager.Fingerprint(serverCertificate), false, cancellation.Token).ConfigureAwait(false);
+                    await Task.Delay(100, cancellation.Token).ConfigureAwait(false);
+                    Console.WriteLine("restart-state server=" + server.State + " client=" + client.State);
+                    if (server.State != PeerConnectionState.Connected || client.State != PeerConnectionState.Connected) throw new InvalidOperationException("Listener did not accept a replacement connection.");
+                    server.Disconnect("restart verified");
+                    await restartListen.ConfigureAwait(false);
+                    }
                 }
+                await VerifyHeartbeatFailSafeAsync(serverCertificate, clientCertificate, cancellation.Token).ConfigureAwait(false);
                 Console.WriteLine("LOOPBACK PASS: paired, bilateral SAS confirmed, pin material emitted, synthetic input frame ordered");
             }
             finally
@@ -108,6 +124,58 @@ namespace WinputLan.Loopback
             var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
             try { listener.Start(); return ((System.Net.IPEndPoint)listener.LocalEndpoint).Port; }
             finally { listener.Stop(); }
+        }
+
+        private static async Task WaitForOfflineAsync(PeerTransport transport, CancellationToken cancellationToken)
+        {
+            while (transport.State != PeerConnectionState.Offline)
+            {
+                await Task.Delay(25, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        private static async Task VerifyHeartbeatFailSafeAsync(System.Security.Cryptography.X509Certificates.X509Certificate2 serverCertificate, System.Security.Cryptography.X509Certificates.X509Certificate2 clientCertificate, CancellationToken cancellationToken)
+        {
+            var port = FindPort();
+            using (var server = new PeerTransport(TimeSpan.FromMilliseconds(75), TimeSpan.FromMilliseconds(250), false))
+            using (var client = new PeerTransport(TimeSpan.FromMilliseconds(75), TimeSpan.FromMilliseconds(250)))
+            {
+                var release = new RecordingFailSafeSink();
+                using (var router = new InputRouter(new InputEventQueue(), client, release))
+                {
+                    var listen = server.ListenOnceAsync(port, serverCertificate, CertificateManager.Fingerprint(clientCertificate), false, cancellationToken);
+                    await Task.Delay(50, cancellationToken).ConfigureAwait(false);
+                    await client.ConnectAsync("127.0.0.1", port, clientCertificate, CertificateManager.Fingerprint(serverCertificate), false, cancellationToken).ConfigureAwait(false);
+                    await Task.Delay(75, cancellationToken).ConfigureAwait(false);
+                    router.SetRemoteActive(true);
+                    if (!router.Publish(InputEvent.Key(InputKind.KeyDown, 0x41, 0x1e, 0, DateTime.UtcNow.Ticks))) throw new InvalidOperationException("Router was not active before heartbeat failure.");
+                    await Task.Delay(650, cancellationToken).ConfigureAwait(false);
+                    if (client.State != PeerConnectionState.Offline || router.Publish(InputEvent.Key(InputKind.KeyDown, 0x41, 0x1e, 0, DateTime.UtcNow.Ticks)) || release.Releases == 0) throw new InvalidOperationException("Heartbeat timeout did not restore local-safe routing.");
+                    server.Disconnect("heartbeat test complete");
+                    await listen.ConfigureAwait(false);
+                }
+            }
+        }
+
+        private sealed class RecordingSink : IInputSink
+        {
+            private readonly TaskCompletionSource<InputEvent> _received = new TaskCompletionSource<InputEvent>();
+            public int Count { get; private set; }
+            public InputEvent Last { get; private set; }
+            public bool Publish(InputEvent value) { Count++; Last = value; _received.TrySetResult(value); return true; }
+            public async Task WaitForCountAsync(int count, CancellationToken cancellationToken)
+            {
+                if (Count >= count) return;
+                var done = await Task.WhenAny(_received.Task, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
+                if (done != _received.Task) throw new TimeoutException("Input sink did not receive paired input.");
+            }
+        }
+
+        private sealed class RecordingFailSafeSink : IFailSafeInputSink
+        {
+            public int Releases { get; private set; }
+            public bool Publish(InputEvent value) { return true; }
+            public void ReleaseAll() { Releases++; }
         }
     }
 }

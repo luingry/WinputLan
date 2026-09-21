@@ -44,3 +44,6 @@ Keep the previous setup executable and manifest. If a new release fails hash,
 signature, pairing, or input cleanup checks, stop publication and point the
 release channel back to the last signed manifest. Never replace an installed
 binary without hash and signature validation.
+# Signed setup release
+
+Releases are intentionally fail-closed: CI requires `SIGNING_PFX_BASE64` and `SIGNING_PFX_PASSWORD`, signs and verifies `WinputLan.exe`, compiles the Inno setup, then signs and verifies `WinputLan-<version>-setup.exe`. `finalize.ps1` emits the setup-only updater manifest and matching SHA-256. A local package build without a certificate or ISCC is not a release and stops with an explicit error.
