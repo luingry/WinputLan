@@ -18,7 +18,7 @@
 
         <StackPanel Grid.Column="0">
             <StackPanel Orientation="Horizontal" Margin="0,0,0,42">
-                <Image Source="assets/brand/icon-normalized.png" Width="28" Height="28" Stretch="Uniform" Margin="0,0,10,0" />
+                <Image Source="/WinputLan;component/assets/brand/icon-normalized.png" Width="28" Height="28" Stretch="Uniform" Margin="0,0,10,0" />
                 <StackPanel>
                     <TextBlock Text="WINPUT" FontSize="17" FontWeight="Bold" />
                     <TextBlock Text="LAN" FontSize="10" Foreground="{StaticResource MutedBrush}" />

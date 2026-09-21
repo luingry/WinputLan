@@ -20,6 +20,6 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="..\..\assets\brand\winput-lan.ico" Link="assets\brand\winput-lan.ico" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\assets\brand\icon-normalized.png" Link="assets\brand\icon-normalized.png" CopyToOutputDirectory="PreserveNewest" />
+    <Resource Include="..\..\assets\brand\icon-normalized.png" Link="assets\brand\icon-normalized.png" />
   </ItemGroup>
 </Project>
