@@ -55,3 +55,10 @@
 - Root cause: the cleanup method was not represented by the sink contract.
 - Resolution: added `IFailSafeInputSink`; physical injection implements it and test sinks remain side-effect free.
 - Prevention: transport-loss tests cover both queue deactivation and the fail-safe capability.
+
+## 2026-09-21 - Icon normalizer image runtime
+
+- Symptom: the deterministic icon normalizer could not compile `System.Drawing` under PowerShell Core.
+- Root cause: the installed .NET runtime exposes only the `System.Drawing` type-forwarder, while the Windows image APIs used for PNG/ICO production are provided by .NET Framework.
+- Resolution: the script re-invokes itself through Windows PowerShell before loading `System.Drawing`.
+- Prevention: run `scripts/normalize-icon.ps1` directly; it selects the compatible runtime itself.
