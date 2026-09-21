@@ -14,7 +14,8 @@ namespace WinputLan.Core
         Heartbeat = 5,
         HeartbeatAck = 6,
         Goodbye = 7,
-        Error = 8
+        Error = 8,
+        ReleaseAll = 9
     }
 
     public enum InputKind : byte
@@ -73,6 +74,17 @@ namespace WinputLan.Core
         {
             return new InputEvent { Kind = InputKind.MouseWheel, MouseData = unchecked((ushort)delta), TimestampUtcTicks = timestampUtcTicks };
         }
+    }
+
+    public static class PointerCoordinates
+    {
+        public static int Normalize(int coordinate, int origin, int size)
+        {
+            if (size <= 1) return 0;
+            return (int)Math.Max(0, Math.Min(65535, (coordinate - origin) * 65535L / (size - 1)));
+        }
+
+        public static int ClampNormalized(int value) { return Math.Max(0, Math.Min(65535, value)); }
     }
 
     public static class ProtocolConstants

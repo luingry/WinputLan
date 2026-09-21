@@ -41,7 +41,7 @@
                 <TextBlock Text="Remote input" Foreground="{StaticResource MutedBrush}" />
             </StackPanel>
             <TextBlock Text="Ctrl + Shift + Alt + 2" FontSize="11" Foreground="{StaticResource TextBrush}" Margin="18,0,0,0" />
-            <TextBlock Text="v0.1.0 · framework-dependent" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,40,0,0" />
+            <TextBlock x:Name="VersionText" Text="version" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,40,0,0" />
         </StackPanel>
 
         <Grid Grid.Column="2">

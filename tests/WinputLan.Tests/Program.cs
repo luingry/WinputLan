@@ -19,6 +19,8 @@ namespace WinputLan.Tests
             Run("pin store abstraction", TestPins);
             Run("queue coalescing and order", TestQueue);
             Run("hotkey validation", TestHotkeys);
+            Run("hotkey hook bypass", TestHotkeyBypass);
+            Run("absolute pointer mapping", TestPointerMapping);
             Run("privacy log", TestPrivacyLog);
             Run("configuration corruption validation", TestConfig);
             Run("release manifest invariants", TestManifest);
@@ -105,6 +107,22 @@ namespace WinputLan.Tests
             Assert(gesture.Modifiers == (HotkeyModifiers.Ctrl | HotkeyModifiers.Shift | HotkeyModifiers.Alt), "modifier parse");
             Expect<Exception>(() => HotkeyGesture.Parse("1"));
             Expect<Exception>(() => HotkeyGesture.Parse("Win+1"));
+        }
+
+        private static void TestHotkeyBypass()
+        {
+            var bypass = new HotkeyBypassDetector(HotkeyGesture.Parse("Ctrl+Shift+Alt+1"), HotkeyGesture.Parse("Ctrl+Shift+Alt+2"));
+            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, 0x11, 0, 0, 1)), "configured ctrl stays local");
+            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, 0x10, 0, 0, 2)), "configured shift stays local");
+            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, 0x12, 0, 0, 3)), "configured alt stays local");
+            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyDown, (ushort)'2', 0, 0, 4)), "remote chord terminal stays local");
+            Assert(bypass.ShouldBypass(InputEvent.Key(InputKind.KeyUp, (ushort)'2', 0, 0, 5)), "terminal key-up stays local exactly once");
+        }
+
+        private static void TestPointerMapping()
+        {
+            Assert(PointerCoordinates.Normalize(100, 0, 200) == 32932, "source pixels normalize into transport space");
+            Assert(PointerCoordinates.ClampNormalized(70000) == 65535 && PointerCoordinates.ClampNormalized(-2) == 0, "destination consumes normalized coordinates independently");
         }
 
         private static void TestPrivacyLog()

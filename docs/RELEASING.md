@@ -47,3 +47,5 @@ binary without hash and signature validation.
 # Signed setup release
 
 Releases are intentionally fail-closed: CI requires `SIGNING_PFX_BASE64` and `SIGNING_PFX_PASSWORD`, signs and verifies `WinputLan.exe`, compiles the Inno setup, then signs and verifies `WinputLan-<version>-setup.exe`. `finalize.ps1` emits the setup-only updater manifest and matching SHA-256. A local package build without a certificate or ISCC is not a release and stops with an explicit error.
+
+`VERSION` is the sole product-version source via `Directory.Build.props`; `app.manifest` retains its Windows assembly-identity schema value and is not used for product/update versioning.

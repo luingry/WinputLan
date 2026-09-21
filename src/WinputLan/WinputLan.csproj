@@ -7,7 +7,6 @@
     <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
     <AssemblyName>WinputLan</AssemblyName>
     <RootNamespace>WinputLan</RootNamespace>
-    <Version>0.1.0</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>..\..\assets\brand\winput-lan.ico</ApplicationIcon>
   </PropertyGroup>

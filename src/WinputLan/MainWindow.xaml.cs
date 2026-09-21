@@ -39,6 +39,7 @@ namespace WinputLan
         private X509Certificate2 _certificate;
         private GlobalHotkeyService _hotkeys;
         private LowLevelInputCapture _capture;
+        private HotkeyBypassDetector _hotkeyBypass;
         private bool _remoteActive;
 
         public MainWindow(WinputConfig config, AppConfigStore configStore)
@@ -51,6 +52,7 @@ namespace WinputLan
             LocalNameText.Text = _config.DisplayName;
             LocalIdText.Text = "id " + _config.DeviceId.Substring(0, Math.Min(12, _config.DeviceId.Length));
             ListenText.Text = "TCP " + _config.ListenPort + " · Private";
+            VersionText.Text = "v" + InstalledVersion + " · framework-dependent";
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             _transactionLog.Add("local", "local", "Session", "ready");
             RefreshLog();
@@ -65,6 +67,7 @@ namespace WinputLan
                 _hotkeys.Invoked += action => Dispatcher.Invoke(() => SetInputTarget(action == HotkeyAction.SelectRemote));
                 _hotkeys.Register(HotkeyAction.SelectLocal, HotkeyGesture.Parse(_config.LocalHotkey));
                 _hotkeys.Register(HotkeyAction.SelectRemote, HotkeyGesture.Parse(_config.RemoteHotkey));
+                _hotkeyBypass = new HotkeyBypassDetector(HotkeyGesture.Parse(_config.LocalHotkey), HotkeyGesture.Parse(_config.RemoteHotkey));
                 _certificateManager = new CertificateManager(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan"), new DpapiSecretProtector());
                 _certificate = _certificateManager.LoadOrCreate();
                 _pinStore = new PinStore(new DpapiSecretProtector());
@@ -89,7 +92,7 @@ namespace WinputLan
                 _inputRouter.InputAudited += AuditInput;
                 _inputReceiver.InputAudited += AuditInput;
                 _listenerInputReceiver.InputAudited += AuditInput;
-                _capture = new LowLevelInputCapture(_inputRouter);
+                _capture = new LowLevelInputCapture(_inputRouter, _hotkeyBypass.ShouldBypass);
                 _capture.Start();
                 AddLog("local", "local", "Hooks", "active");
             }
@@ -271,7 +274,8 @@ namespace WinputLan
 
         private void AuditInput(InputKind kind, string status)
         {
-            Dispatcher.BeginInvoke(new Action(() => AddLog("local", "remote", "Input." + kind, status)));
+            var received = status.StartsWith("received", StringComparison.Ordinal);
+            Dispatcher.BeginInvoke(new Action(() => AddLog(received ? "remote" : "local", received ? "local" : "remote", "Input." + kind, status)));
         }
 
         private void RefreshLog()
@@ -300,6 +304,7 @@ namespace WinputLan
                     var remoteGesture = HotkeyGesture.Parse(remote.Text);
                     if (_hotkeys == null || !_hotkeys.Replace(localGesture, remoteGesture)) throw new InvalidOperationException("Windows could not register one of these global shortcuts.");
                     _config.LocalHotkey = localGesture.ToString(); _config.RemoteHotkey = remoteGesture.ToString();
+                    _hotkeyBypass.Reconfigure(localGesture, remoteGesture);
                     _configStore.Save(_config); AddLog("local", "local", "Hotkeys", "saved-reregistered"); dialog.DialogResult = true;
                 }
                 catch (Exception ex) { MessageBox.Show(ex.Message, "Shortcuts", MessageBoxButton.OK, MessageBoxImage.Warning); }
@@ -314,16 +319,16 @@ namespace WinputLan
             {
                 using (var http = new HttpClient())
                 {
-                    var updater = new GitHubUpdater(http, new WindowsAuthenticodeVerifier());
+                    var updater = new GitHubUpdater(http, new WindowsAuthenticodeVerifier(), Process.GetCurrentProcess().MainModule.FileName);
                     var manifest = await updater.ReadManifestAsync(new Uri("https://github.com/luingry/WinputLan/releases/latest/download/update-manifest.json"), CancellationToken.None);
                     string reason;
-                    if (!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason))
+                    if (!ReleaseManifestValidator.TryValidate(manifest, InstalledVersion, out reason))
                     {
                         UpdatesButton.Content = "Updates · up to date"; AddLog("github", "local", "Update", "no-update");
                         MessageBox.Show("No newer signed update is available.\n\n" + reason, "Updates", MessageBoxButton.OK, MessageBoxImage.Information); return;
                     }
                     UpdatesButton.Content = "Updates · downloading…";
-                    var installer = await updater.DownloadAndValidateAsync(manifest, "0.1.0", Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), CancellationToken.None);
+                    var installer = await updater.DownloadAndValidateAsync(manifest, InstalledVersion, Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), CancellationToken.None);
                     UpdatesButton.Content = "Updates · ready"; AddLog("github", "local", "Update", "validated");
                     if (MessageBox.Show("A signed update " + manifest.Version + " is ready. Start its installer now?", "Updates", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
                         Process.Start(new ProcessStartInfo(installer) { UseShellExecute = true });
@@ -332,6 +337,8 @@ namespace WinputLan
             catch (Exception ex) { UpdatesButton.Content = "Updates · error"; AddLog("github", "local", "Update", "error"); MessageBox.Show("Update check failed safely. No installer was started.\n\n" + ex.Message, "Updates", MessageBoxButton.OK, MessageBoxImage.Warning); }
             finally { UpdatesButton.IsEnabled = true; }
         }
+
+        private static string InstalledVersion { get { return typeof(MainWindow).Assembly.GetName().Version.ToString(3); } }
 
     }
 }

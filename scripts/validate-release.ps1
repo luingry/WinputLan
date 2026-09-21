@@ -3,6 +3,8 @@ param([string]$Configuration = 'Release')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
+if ((Get-Content (Join-Path $root 'Directory.Build.props') -Raw) -notmatch 'ReadAllText.*VERSION') { throw 'Directory.Build.props must be the single VERSION source.' }
+if (Get-ChildItem (Join-Path $root 'src') -Recurse -Filter *.csproj | Select-String -SimpleMatch '<Version>') { throw 'Project files must not duplicate VERSION.' }
 if ((Get-Content (Join-Path $root 'CHANGELOG.md') -Raw) -notmatch "## \[$([regex]::Escape($version))\]") { throw "CHANGELOG has no heading for $version" }
 foreach ($path in @('docs/PLAN.md','docs/ARCHITECTURE.md','docs/SECURITY.md','docs/RELEASING.md','docs/PROTOCOL.md','docs/TESTING.md','docs/DESIGN.md','assets/brand/prototype-master.png','assets/brand/icon-master.png','assets/brand/icon-normalized.png','assets/brand/winput-lan.ico','installer/WinputLan.iss')) {
     if (-not (Test-Path (Join-Path $root $path))) { throw "Missing release invariant: $path" }

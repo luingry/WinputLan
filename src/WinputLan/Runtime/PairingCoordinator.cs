@@ -15,7 +15,7 @@ namespace WinputLan.Runtime
         private readonly PeerTransport _transport;
         private readonly WinputConfig _config;
         private readonly X509Certificate2 _certificate;
-        private readonly byte[] _localNonce;
+        private byte[] _localNonce;
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private PairingTranscript _transcript;
         private PairingConfirmation _confirmation;
@@ -30,8 +30,7 @@ namespace WinputLan.Runtime
             _transport = transport ?? throw new ArgumentNullException("transport");
             _config = config ?? throw new ArgumentNullException("config");
             _certificate = certificate ?? throw new ArgumentNullException("certificate");
-            _localNonce = new byte[32];
-            using (var random = RandomNumberGenerator.Create()) random.GetBytes(_localNonce);
+            ResetSession();
             _transport.StateChanged += Transport_StateChanged;
             _transport.FrameReceived += Transport_FrameReceived;
         }
@@ -63,8 +62,10 @@ namespace WinputLan.Runtime
 
         private void Transport_StateChanged(PeerConnectionState state, string detail)
         {
-            if ((state == PeerConnectionState.Connected || state == PeerConnectionState.Pairing && string.Equals(detail, "TLS ativo", StringComparison.Ordinal)) && !_helloSent) _ = SendHelloAsync();
-            if (state == PeerConnectionState.Faulted && !_completed) PairingFailed?.Invoke(detail);
+            var wasComplete = _completed;
+            if (state == PeerConnectionState.Pairing && string.Equals(detail, "TLS ativo", StringComparison.Ordinal) && !_helloSent) _ = SendHelloAsync();
+            if (state == PeerConnectionState.Faulted || state == PeerConnectionState.Offline) ResetSession();
+            if (state == PeerConnectionState.Faulted && !wasComplete) PairingFailed?.Invoke(detail);
         }
 
         private async Task SendHelloAsync()
@@ -127,6 +128,13 @@ namespace WinputLan.Runtime
         {
             if (!_completed) PairingFailed?.Invoke(reason);
             _transport.Disconnect("pairing failed");
+        }
+
+        private void ResetSession()
+        {
+            _localNonce = new byte[32];
+            using (var random = RandomNumberGenerator.Create()) random.GetBytes(_localNonce);
+            _transcript = null; _confirmation = null; _remoteDeviceId = null; _remoteFingerprint = null; _helloSent = false; _completed = false;
         }
     }
 }

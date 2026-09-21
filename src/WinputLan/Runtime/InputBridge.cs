@@ -39,7 +39,8 @@ namespace WinputLan.Runtime
         private IntPtr _mouseHook;
         private bool _disposed;
 
-        public LowLevelInputCapture(IInputSink sink) { _sink = sink ?? throw new ArgumentNullException("sink"); }
+        private readonly Func<InputEvent, bool> _hotkeyBypass;
+        public LowLevelInputCapture(IInputSink sink, Func<InputEvent, bool> hotkeyBypass = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyBypass = hotkeyBypass; }
 
         public bool Start()
         {
@@ -76,7 +77,12 @@ namespace WinputLan.Runtime
                 {
                     var message = wParam.ToInt32();
                     var kind = message == NativeMethods.WmKeyDown || message == NativeMethods.WmSysKeyDown ? InputKind.KeyDown : message == NativeMethods.WmKeyUp || message == NativeMethods.WmSysKeyUp ? InputKind.KeyUp : (InputKind?)null;
-                    if (kind.HasValue && _sink.Publish(InputEvent.Key(kind.Value, (ushort)data.VirtualKey, (ushort)data.ScanCode, data.Flags, DateTime.UtcNow.Ticks))) return (IntPtr)1;
+                    if (kind.HasValue)
+                    {
+                        var value = InputEvent.Key(kind.Value, (ushort)data.VirtualKey, (ushort)data.ScanCode, data.Flags, DateTime.UtcNow.Ticks);
+                        if (_hotkeyBypass != null && _hotkeyBypass(value)) return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+                        if (_sink.Publish(value)) return (IntPtr)1;
+                    }
                 }
             }
             return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
@@ -91,7 +97,7 @@ namespace WinputLan.Runtime
                 {
                     var message = wParam.ToInt32();
                     InputEvent value = null;
-                    if (message == WmMouseMove) value = InputEvent.MouseMove(data.Point.X, data.Point.Y, DateTime.UtcNow.Ticks);
+                    if (message == WmMouseMove) value = InputEvent.MouseMove(PointerCoordinates.Normalize(data.Point.X, NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenWidth)), PointerCoordinates.Normalize(data.Point.Y, NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenHeight)), DateTime.UtcNow.Ticks);
                     else if (message == WmLButtonDown || message == WmRButtonDown || message == WmMButtonDown) value = InputEvent.MouseButton(InputKind.MouseButtonDown, (uint)message, DateTime.UtcNow.Ticks);
                     else if (message == WmLButtonUp || message == WmRButtonUp || message == WmMButtonUp) value = InputEvent.MouseButton(InputKind.MouseButtonUp, (uint)message, DateTime.UtcNow.Ticks);
                     else if (message == WmMouseWheel) value = InputEvent.MouseWheel(unchecked((short)(data.MouseData >> 16)), DateTime.UtcNow.Ticks);
@@ -126,8 +132,8 @@ namespace WinputLan.Runtime
                 if (value.Kind == InputKind.MouseMove)
                 {
                     flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk;
-                    dx = NormalizeAbsolute(value.X, NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenWidth));
-                    dy = NormalizeAbsolute(value.Y, NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenHeight));
+                    dx = PointerCoordinates.ClampNormalized(value.X);
+                    dy = PointerCoordinates.ClampNormalized(value.Y);
                 }
                 if (value.Kind == InputKind.MouseButtonDown) flags |= MouseButtonFlags(value.Flags, true);
                 if (value.Kind == InputKind.MouseButtonUp) flags |= MouseButtonFlags(value.Flags, false);
@@ -166,12 +172,6 @@ namespace WinputLan.Runtime
             }
         }
 
-        private static int NormalizeAbsolute(int coordinate, int origin, int size)
-        {
-            if (size <= 1) return 0;
-            var normalized = (coordinate - origin) * 65535L / (size - 1);
-            return (int)Math.Max(0, Math.Min(65535, normalized));
-        }
     }
 
     internal static class NativeMethods

@@ -35,9 +35,11 @@ namespace WinputLan.Runtime
 
         public void SetRemoteActive(bool active)
         {
+            var wasActive = _remoteActive;
             _remoteActive = active;
             if (!active)
             {
+                if (wasActive && _transport.State == PeerConnectionState.Connected) _ = SendReleaseAsync();
                 _queue.Clear();
                 ReleaseAll();
             }
@@ -82,6 +84,12 @@ namespace WinputLan.Runtime
         {
             var releasing = _releaseSink as IFailSafeInputSink;
             if (releasing != null) releasing.ReleaseAll();
+        }
+
+        private async Task SendReleaseAsync()
+        {
+            try { await _transport.SendAsync(FrameType.ReleaseAll, new byte[0], _cts.Token).ConfigureAwait(false); InputAudited?.Invoke(InputKind.KeyUp, "sent-release"); }
+            catch { InputAudited?.Invoke(InputKind.KeyUp, "dropped-release"); }
         }
     }
 }

@@ -13,12 +13,12 @@ namespace WinputLan.Runtime
 {
     public interface IAuthenticodeVerifier
     {
-        bool IsSignedAndTrusted(string filePath);
+        string GetTrustedSignerThumbprint(string filePath);
     }
 
     public sealed class WindowsAuthenticodeVerifier : IAuthenticodeVerifier
     {
-        public bool IsSignedAndTrusted(string filePath)
+        public string GetTrustedSignerThumbprint(string filePath)
         {
             try
             {
@@ -26,10 +26,10 @@ namespace WinputLan.Runtime
                 using (var chain = new X509Chain())
                 {
                     chain.ChainPolicy.RevocationMode = X509RevocationMode.NoCheck;
-                    return certificate.NotBefore <= DateTime.UtcNow && certificate.NotAfter >= DateTime.UtcNow && chain.Build(certificate);
+                    return certificate.NotBefore <= DateTime.UtcNow && certificate.NotAfter >= DateTime.UtcNow && chain.Build(certificate) ? certificate.Thumbprint : null;
                 }
             }
-            catch { return false; }
+            catch { return null; }
         }
     }
 
@@ -37,11 +37,13 @@ namespace WinputLan.Runtime
     {
         private readonly HttpClient _http;
         private readonly IAuthenticodeVerifier _verifier;
+        private readonly string _installedExecutablePath;
 
-        public GitHubUpdater(HttpClient httpClient, IAuthenticodeVerifier verifier)
+        public GitHubUpdater(HttpClient httpClient, IAuthenticodeVerifier verifier, string installedExecutablePath)
         {
             _http = httpClient ?? throw new ArgumentNullException("httpClient");
             _verifier = verifier ?? throw new ArgumentNullException("verifier");
+            _installedExecutablePath = installedExecutablePath ?? throw new ArgumentNullException("installedExecutablePath");
         }
 
         public async Task<ReleaseManifest> ReadManifestAsync(Uri manifestUri, CancellationToken cancellationToken)
@@ -57,6 +59,8 @@ namespace WinputLan.Runtime
         {
             string reason;
             if (!ReleaseManifestValidator.TryValidate(manifest, currentVersion, out reason)) throw new InvalidDataException(reason);
+            var expectedSigner = _verifier.GetTrustedSignerThumbprint(_installedExecutablePath);
+            if (string.IsNullOrWhiteSpace(expectedSigner)) throw new InvalidDataException("Updates are disabled because the installed application is unsigned or its signer is not trusted.");
             Directory.CreateDirectory(destinationDirectory);
             var tempPath = Path.Combine(destinationDirectory, manifest.AssetName + ".download");
             var finalPath = Path.Combine(destinationDirectory, manifest.AssetName);
@@ -67,10 +71,16 @@ namespace WinputLan.Runtime
                 if (!string.Equals(hash, manifest.Sha256, StringComparison.OrdinalIgnoreCase)) throw new InvalidDataException("Asset SHA-256 does not match the manifest.");
             }
             File.WriteAllBytes(tempPath, bytes);
-            if (manifest.AuthenticodeRequired && !_verifier.IsSignedAndTrusted(tempPath)) { File.Delete(tempPath); throw new InvalidDataException("Asset is not Authenticode signed by a trusted certificate."); }
+            var downloadedSigner = _verifier.GetTrustedSignerThumbprint(tempPath);
+            if (manifest.AuthenticodeRequired && !HasMatchingSigner(expectedSigner, downloadedSigner)) { File.Delete(tempPath); throw new InvalidDataException("Asset signer does not match the trusted installed application signer."); }
             if (File.Exists(finalPath)) File.Delete(finalPath);
             File.Move(tempPath, finalPath);
             return finalPath;
+        }
+
+        public static bool HasMatchingSigner(string installedSigner, string downloadedSigner)
+        {
+            return !string.IsNullOrWhiteSpace(installedSigner) && !string.IsNullOrWhiteSpace(downloadedSigner) && string.Equals(installedSigner, downloadedSigner, StringComparison.OrdinalIgnoreCase);
         }
     }
 }

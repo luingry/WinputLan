@@ -7,5 +7,6 @@
     <RepositoryUrl>https://github.com/luingry/WinputLan</RepositoryUrl>
     <Company>luingry</Company>
     <Product>Winput LAN</Product>
+    <Version>$([System.IO.File]::ReadAllText('$(MSBuildThisFileDirectory)VERSION').Trim())</Version>
   </PropertyGroup>
 </Project>

@@ -81,20 +81,37 @@ namespace WinputLan.Loopback
                     await client.SendAsync(FrameType.Input, FrameCodec.EncodeInput(InputEvent.Key(InputKind.KeyDown, 0x41, 0x1E, 0, DateTime.UtcNow.Ticks)), cancellation.Token).ConfigureAwait(false);
                     await sink.WaitForCountAsync(1, cancellation.Token).ConfigureAwait(false);
                     if (sink.Last.Kind != InputKind.KeyDown || sink.Last.VirtualKey != 0x41) throw new InvalidOperationException("Paired receiver did not publish synthetic input.");
+                    using (var sender = new InputRouter(new InputEventQueue(), client, new RecordingFailSafeSink()))
+                    {
+                        sender.SetRemoteActive(true);
+                        if (!sender.Publish(InputEvent.Key(InputKind.KeyDown, 0x43, 0x2e, 0, DateTime.UtcNow.Ticks))) throw new InvalidOperationException("Outgoing router did not accept key before local switch.");
+                        await sink.WaitForCountAsync(2, cancellation.Token).ConfigureAwait(false);
+                        sender.SetRemoteActive(false);
+                        await sink.WaitForReleaseAsync(cancellation.Token).ConfigureAwait(false);
+                    }
+                    var releasesBeforeDisconnect = sink.Releases;
+                    await client.SendAsync(FrameType.Input, FrameCodec.EncodeInput(InputEvent.Key(InputKind.KeyDown, 0x44, 0x20, 0, DateTime.UtcNow.Ticks)), cancellation.Token).ConfigureAwait(false);
                     await client.SendAsync(FrameType.Hello, System.Text.Encoding.UTF8.GetBytes(clientConfig.DeviceId + "|" + new string('0', 64) + "|" + Convert.ToBase64String(new byte[32])), cancellation.Token).ConfigureAwait(false);
                     await WaitForOfflineAsync(server, cancellation.Token).ConfigureAwait(false);
+                    if (sink.Releases <= releasesBeforeDisconnect) throw new InvalidOperationException("Disconnect did not release remote receiver state.");
                     await listenTask.ConfigureAwait(false);
-                    var restartListen = server.ListenOnceAsync(serverConfig.ListenPort, serverCertificate, CertificateManager.Fingerprint(clientCertificate), false, cancellation.Token);
+                    var retryServerCode = new TaskCompletionSource<string>();
+                    var retryClientCode = new TaskCompletionSource<string>();
+                    serverPairing.CodeReady += code => retryServerCode.TrySetResult(code);
+                    clientPairing.CodeReady += code => retryClientCode.TrySetResult(code);
+                    var restartListen = server.ListenOnceAsync(serverConfig.ListenPort, serverCertificate, null, true, cancellation.Token);
                     await Task.Delay(100, cancellation.Token).ConfigureAwait(false);
-                    await client.ConnectAsync("127.0.0.1", serverConfig.ListenPort, clientCertificate, CertificateManager.Fingerprint(serverCertificate), false, cancellation.Token).ConfigureAwait(false);
+                    await client.ConnectAsync("127.0.0.1", serverConfig.ListenPort, clientCertificate, null, true, cancellation.Token).ConfigureAwait(false);
                     await Task.Delay(100, cancellation.Token).ConfigureAwait(false);
                     Console.WriteLine("restart-state server=" + server.State + " client=" + client.State);
-                    if (server.State != PeerConnectionState.Connected || client.State != PeerConnectionState.Connected) throw new InvalidOperationException("Listener did not accept a replacement connection.");
+                    var retryCodes = await WaitForCodesAsync(retryServerCode.Task, retryClientCode.Task, cancellation.Token).ConfigureAwait(false);
+                    if (retryCodes[0] == codes[0] || server.State != PeerConnectionState.Pairing || client.State != PeerConnectionState.Pairing) throw new InvalidOperationException("Pairing did not reset with a fresh retry session.");
                     server.Disconnect("restart verified");
                     await restartListen.ConfigureAwait(false);
                     }
                 }
                 await VerifyHeartbeatFailSafeAsync(serverCertificate, clientCertificate, cancellation.Token).ConfigureAwait(false);
+                VerifySignerContinuity();
                 Console.WriteLine("LOOPBACK PASS: paired, bilateral SAS confirmed, pin material emitted, synthetic input frame ordered");
             }
             finally
@@ -157,17 +174,32 @@ namespace WinputLan.Loopback
             }
         }
 
-        private sealed class RecordingSink : IInputSink
+        private static void VerifySignerContinuity()
+        {
+            if (!GitHubUpdater.HasMatchingSigner("ABC", "abc") || GitHubUpdater.HasMatchingSigner("ABC", "DEF") || GitHubUpdater.HasMatchingSigner(null, "ABC")) throw new InvalidOperationException("Updater signer continuity policy is not fail-closed.");
+        }
+
+        private sealed class RecordingSink : IFailSafeInputSink
         {
             private readonly TaskCompletionSource<InputEvent> _received = new TaskCompletionSource<InputEvent>();
+            private readonly TaskCompletionSource<bool> _released = new TaskCompletionSource<bool>();
             public int Count { get; private set; }
+            public int Releases { get; private set; }
             public InputEvent Last { get; private set; }
             public bool Publish(InputEvent value) { Count++; Last = value; _received.TrySetResult(value); return true; }
             public async Task WaitForCountAsync(int count, CancellationToken cancellationToken)
             {
-                if (Count >= count) return;
-                var done = await Task.WhenAny(_received.Task, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
-                if (done != _received.Task) throw new TimeoutException("Input sink did not receive paired input.");
+                while (Count < count)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Delay(5, cancellationToken).ConfigureAwait(false);
+                }
+            }
+            public void ReleaseAll() { Releases++; _released.TrySetResult(true); }
+            public async Task WaitForReleaseAsync(CancellationToken cancellationToken)
+            {
+                var done = await Task.WhenAny(_released.Task, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
+                if (done != _released.Task) throw new TimeoutException("Input receiver did not receive release control.");
             }
         }
 
