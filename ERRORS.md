@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-09-21 - Executable avulso sem dependências de runtime
+
+- Sintoma: `I:\Downloads\WinputLan.exe` não abria e o Windows registrava `System.IO.FileNotFoundException` em `WinputLan.App.OnStartup`.
+- Causa raiz: a distribuição copiou apenas o executável de um aplicativo WPF .NET Framework dependente de `WinputLan.Core.dll` e `WinputLan.exe.config`.
+- Solução: distribuir os três artefatos da mesma build juntos e verificar os hashes antes do teste de abertura.
+- Prevenção: a cópia manual para Downloads deve preservar o conjunto de runtime (`.exe`, `.dll` e `.exe.config`); para entrega a terceiros, usar o instalador/release que empacota esse conjunto.
+
 ## 2026-09-21 - Release executable locked by visual smoke
 
 - Symptom: Release build could not replace `WinputLan.exe` while a prior smoke instance was open.
