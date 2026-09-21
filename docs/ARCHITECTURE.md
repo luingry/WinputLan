@@ -1,0 +1,33 @@
+# Architecture
+
+```text
+WH_*_LL hooks -> InputRouter -> bounded InputEventQueue -> TLS PeerTransport
+                                              ^                 |
+                                      fail-safe release <- SendInput
+
+WPF UI -> PairingCoordinator -> TLS transcript/SAS -> DPAPI PinStore
+```
+
+`WinputLan.Core` is netstandard2.0 and contains deterministic protocol,
+pairing, config validation, queue, hotkey, privacy log, SemVer, and backoff
+logic. The WPF project is net48 and owns Win32 hooks, SendInput, DPAPI,
+certificates, sockets, firewall, updater, and the UI.
+
+There is no service process and no elevation requirement. A listener uses the
+single configured TCP port. A connection is `TcpClient.NoDelay` plus `SslStream`
+with TLS 1.2 and client certificates on both sides. Frame reading runs off the
+connect caller; a five-second heartbeat is sent while connected. A pinned
+outbound target is retried with bounded exponential backoff (250 ms to 15 s);
+pairing itself remains explicit so an unknown peer is never auto-approved.
+
+Input events have fixed-size binary payloads. The queue refuses to reorder
+keyboard/button events. Only a consecutive tail `MouseMove` is replaced; a
+full queue never evicts a key or button. Any failed remote route clears the
+queue, releases tracked state, and returns to local-safe behavior.
+
+The UI is intentionally a compact operating surface: local machine, active
+target, pairing, shortcuts, and a metadata-only log. The visual thesis is
+neutral graphite grouping with a visible but non-neon green reserved for
+active/success/action states. Focus, disabled, hover and pressed states are
+defined in `App.xaml`; the app avoids decorative motion and is safe under a
+reduced-motion system preference.

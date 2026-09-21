@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <AssemblyName>WinputLan.Tests</AssemblyName>
+    <RootNamespace>WinputLan.Tests</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\WinputLan.Core\WinputLan.Core.csproj" />
+  </ItemGroup>
+</Project>

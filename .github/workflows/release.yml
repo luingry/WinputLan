@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.x'
+      - name: Verify tag matches VERSION
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag/version mismatch" }
+      - name: Build and test
+        shell: pwsh
+        run: ./scripts/build.ps1 -Configuration Release
+      - name: Package portable payload
+        shell: pwsh
+        run: ./scripts/finalize.ps1 -Configuration Release
+      - name: Release notes
+        shell: pwsh
+        run: ./scripts/release-notes.ps1 | Set-Content artifacts/release-notes.md -Encoding UTF8
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: artifacts/release-notes.md
+          files: |
+            artifacts/WinputLan-*/**
+          fail_on_unmatched_files: true

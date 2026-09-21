@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+artifacts/
+*.user
+*.suo
+*.pfx
+*.pfx.dpapi
+*.download
+*.tmp
+.vs/

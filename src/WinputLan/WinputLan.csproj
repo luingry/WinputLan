@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultApplicationDefinition>true</EnableDefaultApplicationDefinition>
+    <EnableDefaultCompileItems>true</EnableDefaultCompileItems>
+    <AssemblyName>WinputLan</AssemblyName>
+    <RootNamespace>WinputLan</RootNamespace>
+    <Version>0.1.0</Version>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>..\..\assets\brand\winput-lan.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\WinputLan.Core\WinputLan.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="System.Runtime.Serialization" />
+    <Reference Include="System.Security" />
+    <Reference Include="System.Net.Http" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\assets\brand\winput-lan.ico" Link="assets\brand\winput-lan.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\assets\brand\icon-normalized.png" Link="assets\brand\icon-normalized.png" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
