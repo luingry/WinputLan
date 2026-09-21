@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-09-21 - Release executable locked by visual smoke
+
+- Symptom: Release build could not replace `WinputLan.exe` while a prior smoke instance was open.
+- Root cause: Windows holds the executable image handle for the running WPF process.
+- Resolution: stop only the smoke instance before rebuilding, then launch the freshly built binary for capture.
+- Prevention: the smoke sequence is build → launch → capture → close; never rebuild over a live smoke process.
+
 ## 2026-09-21 - Build without restore
 
 - Symptom: `dotnet build --no-restore` reported missing `obj/project.assets.json`.

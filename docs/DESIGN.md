@@ -1,9 +1,21 @@
 # Design direction
 
-The UI follows the supplied Winput LAN reference: a quiet left rail, one clear
-active target, compact metadata cards, and an operational log. The final asset
-palette uses graphite `#35393D` and flat green `#72B47A`; app surfaces remain
-neutral gray so green has semantic weight rather than becoming decoration.
+`assets/brand/prototype-master.png` is the literal desktop composition baseline,
+not loose inspiration. At the 1564×1006 primary viewport the application uses a
+54px product chrome, a 286px left rail, and a dense dashboard ordered as
+Máquinas → Atalhos → Registro. The rail's active state has a green leading
+stripe; rows, keycaps and the table are grouped with backgrounds and spacing,
+not wrapper borders. Pairing is a modal overlay so it never displaces those
+three operational sections. The rail deliberately contains only Atualizações:
+Máquinas, Atalhos and Registro are continuous dashboard sections, not
+navigation destinations. The shortcut editor uses the same in-window overlay,
+including focusable text fields, error copy, cancel and save actions.
+
+The palette is `#101519` / `#171C20` / `#20262B`, with `#79D88B` reserved for
+connection, selection and primary action. Icons are local outline paths and the
+only persisted peer shown is the actual pinned peer; otherwise the machines
+component renders its empty state. The dashboard remains scrollable below the
+primary viewport instead of clipping actions or the input log.
 
 The generated prototype and icon masters live in `assets/brand`. The normalized
 two-tone icon is `icon-normalized.png`, and `winput-lan.ico` is the real icon

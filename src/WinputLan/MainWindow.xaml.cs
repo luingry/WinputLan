@@ -9,7 +9,9 @@ using System.Security.Cryptography.X509Certificates;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Interop;
+using System.Windows.Input;
 using System.Windows.Media;
 using WinputLan.Core;
 using WinputLan.Runtime;
@@ -21,7 +23,7 @@ namespace WinputLan
         private readonly WinputConfig _config;
         private readonly AppConfigStore _configStore;
         private readonly InMemoryTransactionLog _transactionLog = new InMemoryTransactionLog();
-        private readonly ObservableCollection<string> _logLines = new ObservableCollection<string>();
+        private readonly ObservableCollection<TransactionLogEntry> _logLines = new ObservableCollection<TransactionLogEntry>();
         private readonly InputEventQueue _inputQueue = new InputEventQueue();
         private readonly SendInputSink _inputSink = new SendInputSink();
         private readonly PeerTransport _transport = new PeerTransport();
@@ -52,10 +54,12 @@ namespace WinputLan
             _configStore = configStore;
             LogList.ItemsSource = _logLines;
             LocalNameText.Text = _config.DisplayName;
-            LocalIdText.Text = "id " + _config.DeviceId.Substring(0, Math.Min(12, _config.DeviceId.Length));
-            ListenText.Text = "TCP " + _config.ListenPort + " · Private";
-            VersionText.Text = "v" + InstalledVersion + " · framework-dependent";
+            LocalAddressText.Text = Environment.MachineName + "  |  TCP " + _config.ListenPort;
+            VersionText.Text = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
+            LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
+            RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);
+            RefreshKnownPeer();
             _transactionLog.Add("local", "local", "Session", "ready");
             RefreshLog();
             _transport.StateChanged += Transport_StateChanged;
@@ -128,6 +132,16 @@ namespace WinputLan
         }
 
         private void PairNowButton_Click(object sender, RoutedEventArgs e) { BeginPairing(); }
+        private void ClosePairingButton_Click(object sender, RoutedEventArgs e) { PairingOverlay.Visibility = Visibility.Collapsed; }
+        private void Chrome_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 2) WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
+            else DragMove();
+        }
+        private void MinimizeButton_Click(object sender, RoutedEventArgs e) { WindowState = WindowState.Minimized; }
+        private void MaximizeButton_Click(object sender, RoutedEventArgs e) { WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; }
+        private void CloseButton_Click(object sender, RoutedEventArgs e) { Close(); }
+        private void RemoteMachineRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) { SetInputTarget(true); }
         private async void ConnectPairButton_Click(object sender, RoutedEventArgs e)
         {
             BeginPairing();
@@ -154,9 +168,9 @@ namespace WinputLan
                 MessageBox.Show("Could not connect to the peer. Check the address, Private firewall rule and pairing state.\n\n" + ex.Message, "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
-        private void PairingButton_Click(object sender, RoutedEventArgs e) { BeginPairing(); }
-        private void MachinesButton_Click(object sender, RoutedEventArgs e) { SetInputTarget(false); }
-        private void ShortcutsButton_Click(object sender, RoutedEventArgs e) { ShowShortcutsEditor(); }
+        private void MachinesButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToTop(); SetInputTarget(false); }
+        private void ShortcutsButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToVerticalOffset(360); ShowShortcutsEditor(); }
+        private void LogNavButton_Click(object sender, RoutedEventArgs e) { LogSection.BringIntoView(); }
         private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(); }
         private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); RefreshLog(); }
         private void ConfirmPairButton_Click(object sender, RoutedEventArgs e)
@@ -168,11 +182,35 @@ namespace WinputLan
 
         private void BeginPairing()
         {
-            ConnectionStateText.Text = "PAIRING";
+            PairingOverlay.Visibility = Visibility.Visible;
             PairCodeText.Text = "—— ——";
-            PairCodeStateText.Text = "Waiting for a remote offer";
+            PairCodeStateText.Text = "Aguardando uma oferta remota";
             ConfirmPairButton.IsEnabled = false;
             AddLog("local", "remote", "Pairing", "waiting");
+        }
+
+        private void RefreshKnownPeer()
+        {
+            var hasPeer = !string.IsNullOrWhiteSpace(_config.PinnedDeviceId) && !string.IsNullOrWhiteSpace(_config.PinnedFingerprint);
+            RemoteMachineRow.Visibility = hasPeer ? Visibility.Visible : Visibility.Collapsed;
+            NoPeersState.Visibility = hasPeer ? Visibility.Collapsed : Visibility.Visible;
+            RemoteShortcutTargetText.Text = hasPeer ? "Máquina vinculada" : "Nenhuma máquina";
+            RemoteShortcutBadge.Visibility = hasPeer ? Visibility.Visible : Visibility.Collapsed;
+            if (hasPeer)
+            {
+                RemoteAddressText.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "Endereço da rede local" : _config.RemoteAddress;
+                RemoteNameText.Text = "Máquina vinculada";
+                RemoteStateText.Text = "Pronto para receber entrada";
+                RemoteBadgeText.Text = "Disponível";
+                LatencyText.Text = "Aguardando atalho";
+            }
+        }
+
+        private static string ShortcutTail(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value)) return "—";
+            var parts = value.Split(new[] { '+' }, StringSplitOptions.RemoveEmptyEntries);
+            return parts.Length == 0 ? value : parts[parts.Length - 1].Trim();
         }
 
         private PairingCoordinator CreatePairingCoordinator(PeerTransport transport)
@@ -182,9 +220,8 @@ namespace WinputLan
             {
                 _confirmationCoordinator = coordinator;
                 PairCodeText.Text = code.Substring(0, 3) + " " + code.Substring(3);
-                PairCodeStateText.Text = "Verify this code on the other PC";
+                PairCodeStateText.Text = "Verifique este código na outra máquina";
                 ConfirmPairButton.IsEnabled = true;
-                ConnectionStateText.Text = "PAIRING";
                 AddLog("remote", "local", "Pairing", "code-ready");
             });
             coordinator.PairingCompleted += record => Dispatcher.Invoke(() => CompletePairing(record, ReferenceEquals(coordinator, _pairingCoordinator)));
@@ -201,9 +238,10 @@ namespace WinputLan
                 _config.PinnedDeviceId = record.DeviceId;
                 _config.PinnedFingerprint = record.CertificateFingerprint;
                 _configStore.Save(_config);
-                PairCodeStateText.Text = "Confirmed bilaterally · certificate pinned";
+                PairCodeStateText.Text = "Confirmado nos dois PCs · certificado fixado";
                 ConfirmPairButton.IsEnabled = false;
-                RemoteNameText.Text = "Paired peer";
+                PairingOverlay.Visibility = Visibility.Collapsed;
+                RefreshKnownPeer();
                 AddLog("local", "remote", "Pairing", "confirmed");
                 if (outbound) _ = RestartListenerAsync();
                 if (!string.IsNullOrWhiteSpace(_config.RemoteAddress))
@@ -273,9 +311,10 @@ namespace WinputLan
             _remoteActive = remote;
             _inputRouter?.SetRemoteActive(remote);
             RemoteDot.Fill = remote ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("MutedBrush");
-            ConnectionStateText.Text = remote ? "REMOTE" : "LOCAL";
-            TargetStateText.Text = remote ? "Active · inputs route to peer" : "Offline · local input active";
-            TargetStateDot.Fill = remote ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("MutedBrush");
+            TargetStateText.Text = remote ? "Recebendo entrada" : "Aguardando atalho";
+            RemoteStateText.Text = remote ? "Entrada ativa nesta máquina" : "Pronto para receber entrada";
+            RemoteBadgeText.Text = remote ? "Ativa" : "Disponível";
+            RemoteShortcutStatusText.Text = remote ? "Ativo" : "Configurado";
             AddLog("local", remote ? "remote" : "local", "Target", remote ? "selected" : "restored");
         }
 
@@ -283,8 +322,8 @@ namespace WinputLan
         {
             Dispatcher.Invoke(() =>
             {
-                if (state == PeerConnectionState.Connected) { RemoteNameText.Text = "Paired peer"; RemoteAddressText.Text = _config.RemoteAddress ?? "LAN peer"; LatencyText.Text = "measuring"; }
-                else if (state == PeerConnectionState.Offline) { LatencyText.Text = "—"; RemoteNameText.Text = "No target"; }
+                if (state == PeerConnectionState.Connected) { RemoteNameText.Text = "Máquina vinculada"; RemoteAddressText.Text = _config.RemoteAddress ?? "Rede local"; LatencyText.Text = "Conectada agora"; RemoteStateText.Text = "Pronto para receber entrada"; }
+                else if (state == PeerConnectionState.Offline) { LatencyText.Text = "Última conexão indisponível"; RemoteStateText.Text = "Não está acessível agora"; RemoteBadgeText.Text = "Offline"; }
                 AddLog("remote", "local", "Transport", state.ToString());
             });
         }
@@ -304,35 +343,43 @@ namespace WinputLan
         private void RefreshLog()
         {
             _logLines.Clear();
-            foreach (var entry in _transactionLog.Snapshot().Reverse().Select(e => e.ToString())) _logLines.Add(entry);
-            LogStatusText.Text = _logLines.Count + " events this session";
+            foreach (var entry in _transactionLog.Snapshot().Reverse()) _logLines.Add(entry);
+            LogStatusText.Text = _logLines.Count + " eventos nesta sessão";
         }
 
         private void ShowShortcutsEditor()
         {
-            var local = new System.Windows.Controls.TextBox { Text = _config.LocalHotkey, Margin = new Thickness(0, 5, 0, 10) };
-            var remote = new System.Windows.Controls.TextBox { Text = _config.RemoteHotkey, Margin = new Thickness(0, 5, 0, 12) };
-            System.Windows.Automation.AutomationProperties.SetName(local, "Local input shortcut");
-            System.Windows.Automation.AutomationProperties.SetName(remote, "Remote input shortcut");
-            var save = new System.Windows.Controls.Button { Content = "Save shortcuts", IsDefault = true, MinWidth = 120, HorizontalAlignment = HorizontalAlignment.Right };
-            var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(22), Width = 330 };
-            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "LOCAL INPUT", FontWeight = FontWeights.SemiBold }); panel.Children.Add(local);
-            panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "REMOTE INPUT", FontWeight = FontWeights.SemiBold }); panel.Children.Add(remote); panel.Children.Add(save);
-            var dialog = new Window { Title = "Shortcuts", Content = panel, Owner = this, SizeToContent = SizeToContent.WidthAndHeight, WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize };
-            save.Click += (s, args) =>
+            LocalHotkeyBox.Text = _config.LocalHotkey;
+            RemoteHotkeyBox.Text = _config.RemoteHotkey;
+            HotkeyErrorText.Text = string.Empty;
+            HotkeyErrorText.Visibility = Visibility.Collapsed;
+            HotkeyOverlay.Visibility = Visibility.Visible;
+            LocalHotkeyBox.Focus();
+        }
+
+        private void CancelHotkeysButton_Click(object sender, RoutedEventArgs e) { HotkeyOverlay.Visibility = Visibility.Collapsed; }
+
+        private void SaveHotkeysButton_Click(object sender, RoutedEventArgs e)
+        {
+            try
             {
-                try
-                {
-                    var localGesture = HotkeyGesture.Parse(local.Text);
-                    var remoteGesture = HotkeyGesture.Parse(remote.Text);
-                    if (_hotkeys == null || !_hotkeys.Replace(localGesture, remoteGesture)) throw new InvalidOperationException("Windows could not register one of these global shortcuts.");
-                    _config.LocalHotkey = localGesture.ToString(); _config.RemoteHotkey = remoteGesture.ToString();
-                    _hotkeyBypass.Reconfigure(localGesture, remoteGesture);
-                    _configStore.Save(_config); AddLog("local", "local", "Hotkeys", "saved-reregistered"); dialog.DialogResult = true;
-                }
-                catch (Exception ex) { MessageBox.Show(ex.Message, "Shortcuts", MessageBoxButton.OK, MessageBoxImage.Warning); }
-            };
-            dialog.ShowDialog();
+                var localGesture = HotkeyGesture.Parse(LocalHotkeyBox.Text);
+                var remoteGesture = HotkeyGesture.Parse(RemoteHotkeyBox.Text);
+                if (_hotkeys == null || !_hotkeys.Replace(localGesture, remoteGesture)) throw new InvalidOperationException("O Windows não conseguiu registrar um dos atalhos globais.");
+                _config.LocalHotkey = localGesture.ToString(); _config.RemoteHotkey = remoteGesture.ToString();
+                _hotkeyBypass.Reconfigure(localGesture, remoteGesture);
+                _configStore.Save(_config);
+                LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
+                RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);
+                AddLog("local", "local", "Atalhos", "salvos");
+                HotkeyOverlay.Visibility = Visibility.Collapsed;
+            }
+            catch (Exception ex)
+            {
+                HotkeyErrorText.Text = ex.Message;
+                HotkeyErrorText.Visibility = Visibility.Visible;
+                LocalHotkeyBox.Focus();
+            }
         }
 
         private async Task CheckUpdatesAsync()

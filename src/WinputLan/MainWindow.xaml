@@ -1,118 +1,37 @@
-<Window x:Class="WinputLan.MainWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Winput LAN"
-        Width="1120" Height="720" MinWidth="900" MinHeight="600"
-        Background="{StaticResource WindowBrush}"
-        Foreground="{StaticResource TextBrush}"
-        WindowStartupLocation="CenterScreen"
-        SnapsToDevicePixels="True"
-        SourceInitialized="Window_SourceInitialized"
-        Closing="Window_Closing">
-    <Grid Margin="26">
-        <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="214" />
-            <ColumnDefinition Width="30" />
-            <ColumnDefinition Width="*" />
-        </Grid.ColumnDefinitions>
-
-        <StackPanel Grid.Column="0">
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,42">
-                <Image Source="/WinputLan;component/assets/brand/icon-normalized.png" Width="28" Height="28" Stretch="Uniform" Margin="0,0,10,0" />
-                <StackPanel>
-                    <TextBlock Text="WINPUT" FontSize="17" FontWeight="Bold" />
-                    <TextBlock Text="LAN" FontSize="10" Foreground="{StaticResource MutedBrush}" />
-                </StackPanel>
-            </StackPanel>
-            <TextBlock Text="OPERATING SPACE" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12" />
-            <Button x:Name="MachinesButton" Content="Machines" HorizontalContentAlignment="Left" Click="MachinesButton_Click" Background="{StaticResource RaisedBrush}" />
-            <Button x:Name="PairingButton" Content="Pairing" HorizontalContentAlignment="Left" Click="PairingButton_Click" />
-            <Button x:Name="ShortcutsButton" Content="Shortcuts" HorizontalContentAlignment="Left" Click="ShortcutsButton_Click" />
-            <Button x:Name="UpdatesButton" Content="Updates" HorizontalContentAlignment="Left" Click="UpdatesButton_Click" />
-            <Border Height="1" Background="#3A4142" Margin="0,30,8,20" />
-            <TextBlock Text="THIS SESSION" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,0,0,12" />
-            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                <Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" Margin="2,0,8,0" VerticalAlignment="Center" />
-                <TextBlock Text="Local input" Foreground="{StaticResource MutedBrush}" />
-            </StackPanel>
-            <TextBlock Text="Ctrl + Shift + Alt + 1" FontSize="11" Foreground="{StaticResource TextBrush}" Margin="18,0,0,16" />
-            <StackPanel Orientation="Horizontal">
-                <Ellipse x:Name="RemoteDot" Width="8" Height="8" Fill="{StaticResource MutedBrush}" Margin="2,0,8,0" VerticalAlignment="Center" />
-                <TextBlock Text="Remote input" Foreground="{StaticResource MutedBrush}" />
-            </StackPanel>
-            <TextBlock Text="Ctrl + Shift + Alt + 2" FontSize="11" Foreground="{StaticResource TextBrush}" Margin="18,0,0,0" />
-            <TextBlock x:Name="VersionText" Text="version" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,40,0,0" />
-        </StackPanel>
-
-        <Grid Grid.Column="2">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" Margin="0,0,0,32">
-                <StackPanel>
-                    <TextBlock Text="Machines" FontSize="29" FontWeight="SemiBold" />
-                    <TextBlock Text="One active target. Inputs stay on your LAN." Foreground="{StaticResource MutedBrush}" FontSize="13" Margin="0,4,0,0" />
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                    <TextBlock x:Name="ConnectionStateText" Text="LOCAL" FontSize="11" FontWeight="SemiBold" Foreground="{StaticResource AccentStrongBrush}" VerticalAlignment="Center" Margin="0,0,16,0" />
-                    <Button x:Name="PairNowButton" Content="Pair a machine" Style="{StaticResource PrimaryButton}" Click="PairNowButton_Click" />
-                </StackPanel>
-            </Grid>
-
-            <Grid Grid.Row="1" Margin="0,0,0,26">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
-                <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" CornerRadius="10" Padding="20">
-                    <Grid>
-                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                        <Grid Grid.Row="0"><TextBlock Text="THIS PC" FontSize="10" Foreground="{StaticResource MutedBrush}" /><TextBlock x:Name="LocalNameText" Text="Local machine" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-                        <TextBlock Grid.Row="1" x:Name="LocalIdText" Text="device id" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,7,0,17" />
-                        <Grid Grid.Row="2" Margin="0,0,0,18"><TextBlock Text="LISTENING" FontSize="10" Foreground="{StaticResource MutedBrush}" /><TextBlock x:Name="ListenText" Text="TCP 45900 · Private" FontSize="13" HorizontalAlignment="Right" /></Grid>
-                        <StackPanel Grid.Row="3" Orientation="Horizontal"><Ellipse Width="8" Height="8" Fill="{StaticResource AccentBrush}" Margin="0,0,7,0" VerticalAlignment="Center" /><TextBlock Text="Ready for a paired peer" Foreground="{StaticResource AccentStrongBrush}" FontSize="12" /></StackPanel>
-                    </Grid>
-                </Border>
-                <Border Grid.Column="2" Background="{StaticResource SurfaceBrush}" CornerRadius="10" Padding="20">
-                    <Grid>
-                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                        <Grid Grid.Row="0"><TextBlock Text="ACTIVE TARGET" FontSize="10" Foreground="{StaticResource MutedBrush}" /><TextBlock x:Name="RemoteNameText" Text="No target" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Right" /></Grid>
-                        <TextBlock Grid.Row="1" x:Name="RemoteAddressText" Text="Pair a machine to begin" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="0,7,0,17" />
-                        <Grid Grid.Row="2" Margin="0,0,0,18"><TextBlock Text="LATENCY" FontSize="10" Foreground="{StaticResource MutedBrush}" /><TextBlock x:Name="LatencyText" Text="—" FontSize="13" HorizontalAlignment="Right" /></Grid>
-                        <StackPanel Grid.Row="3" Orientation="Horizontal"><Ellipse x:Name="TargetStateDot" Width="8" Height="8" Fill="{StaticResource MutedBrush}" Margin="0,0,7,0" VerticalAlignment="Center" /><TextBlock x:Name="TargetStateText" Text="Offline · local input active" Foreground="{StaticResource MutedBrush}" FontSize="12" /></StackPanel>
-                    </Grid>
-                </Border>
-            </Grid>
-
-            <Grid Grid.Row="2">
-                <Grid.ColumnDefinitions><ColumnDefinition Width="1.1*" /><ColumnDefinition Width="20" /><ColumnDefinition Width="0.9*" /></Grid.ColumnDefinitions>
-                <Border Grid.Column="0" Background="{StaticResource SurfaceBrush}" CornerRadius="10" Padding="20">
-                    <Grid>
-                        <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                        <Grid Grid.Row="0"><TextBlock Text="TRANSACTION LOG" FontSize="10" Foreground="{StaticResource MutedBrush}" /><Button Content="Clear" HorizontalAlignment="Right" Padding="10,4" Margin="0" Click="ClearLogButton_Click" /></Grid>
-                        <TextBlock Grid.Row="1" Text="No typed content is recorded." FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12" />
-                        <ListView Grid.Row="2" x:Name="LogList" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                            <ListView.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" FontSize="11" Foreground="{StaticResource TextBrush}" Margin="0,3" /></DataTemplate></ListView.ItemTemplate>
-                        </ListView>
-                        <TextBlock Grid.Row="3" x:Name="LogStatusText" Text="0 events this session" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,12,0,0" />
-                    </Grid>
-                </Border>
-                <Border Grid.Column="2" Background="{StaticResource SurfaceBrush}" CornerRadius="10" Padding="20">
-                    <StackPanel>
-                        <TextBlock Text="PAIRING" FontSize="10" Foreground="{StaticResource MutedBrush}" />
-                        <TextBlock Text="Confirm the same code on both PCs." FontSize="18" FontWeight="SemiBold" Margin="0,9,0,5" />
-                        <TextBlock Text="TLS is used for the connection. After confirmation, the peer certificate is pinned and protected with Windows DPAPI." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="12" LineHeight="18" />
-                        <TextBlock Text="PEER ADDRESS" FontSize="10" Foreground="{StaticResource MutedBrush}" Margin="0,17,0,0" />
-                        <TextBox x:Name="RemoteAddressBox" Text="127.0.0.1" AutomationProperties.Name="Peer address" />
-                        <Button x:Name="ConnectPairButton" Content="Connect &amp; pair" Style="{StaticResource PrimaryButton}" Click="ConnectPairButton_Click" />
-                        <Border Background="{StaticResource RaisedBrush}" CornerRadius="8" Padding="15" Margin="0,22,0,17">
-                            <StackPanel HorizontalAlignment="Center"><TextBlock Text="SHARED CODE" FontSize="10" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" /><TextBlock x:Name="PairCodeText" Text="—— ——" FontSize="27" FontWeight="SemiBold" Foreground="{StaticResource AccentStrongBrush}" HorizontalAlignment="Center" Margin="0,8,0,3" /><TextBlock x:Name="PairCodeStateText" Text="Not available until a peer offers" FontSize="11" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" /></StackPanel>
-                        </Border>
-                        <Button x:Name="ConfirmPairButton" Content="Confirm code" Style="{StaticResource PrimaryButton}" IsEnabled="False" Click="ConfirmPairButton_Click" />
-                        <Button Content="How pairing works" Click="HowPairingButton_Click" />
-                    </StackPanel>
-                </Border>
-            </Grid>
-        </Grid>
+<Window x:Class="WinputLan.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" Title="Winput LAN" Width="1564" Height="1006" MinWidth="980" MinHeight="680" Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}" WindowStartupLocation="CenterScreen" WindowStyle="None" ResizeMode="CanResize" SnapsToDevicePixels="True" SourceInitialized="Window_SourceInitialized" Closing="Window_Closing">
+ <Grid>
+  <Grid.RowDefinitions><RowDefinition Height="54"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+  <Grid Grid.Row="0" Background="{StaticResource ChromeBrush}" MouseLeftButtonDown="Chrome_MouseLeftButtonDown">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="286"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="32,0,0,0"><Image Source="/WinputLan;component/assets/brand/icon-normalized.png" Width="30" Height="30" Margin="0,0,12,0"/><TextBlock Text="Winput LAN" FontSize="21" FontWeight="SemiBold"/></StackPanel>
+   <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center"><Ellipse Width="17" Height="17" Fill="{StaticResource AccentBrush}" Margin="0,0,10,0"/><TextBlock Text="Rede local OK" Foreground="{StaticResource AccentStrongBrush}" FontSize="14"/><Rectangle Width="1" Height="24" Fill="#4A5456" Margin="22,0,18,0"/><TextBlock x:Name="VersionText" Text="v0.1.0" Foreground="{StaticResource MutedBrush}" FontSize="13"/><Rectangle Width="1" Height="24" Fill="#4A5456" Margin="18,0,14,0"/></StackPanel>
+   <StackPanel Grid.Column="2" Orientation="Horizontal"><Button Style="{StaticResource ChromeButton}" Content="—" Click="MinimizeButton_Click"/><Button Style="{StaticResource ChromeButton}" Content="□" Click="MaximizeButton_Click"/><Button Style="{StaticResource CloseChromeButton}" Content="×" Click="CloseButton_Click"/></StackPanel>
+  </Grid>
+  <Grid Grid.Row="1"><Grid.ColumnDefinitions><ColumnDefinition Width="286"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+   <Grid Grid.Column="0" Background="{StaticResource RailBrush}"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+    <StackPanel Margin="18,25,18,0">
+     <Button x:Name="UpdatesButton" Style="{StaticResource RailButtonActive}" Click="UpdatesButton_Click"><StackPanel Orientation="Horizontal"><Viewbox Width="29" Height="29"><Canvas Width="30" Height="30"><Path Data="M5,14 A10,10 0 0 1 22,8" Stroke="{StaticResource TextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/><Path Data="M22,8 L18,4 M22,8 L26,4" Stroke="{StaticResource TextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/><Path Data="M25,16 A10,10 0 0 1 8,22" Stroke="{StaticResource TextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/><Path Data="M8,22 L12,26 M8,22 L4,26" Stroke="{StaticResource TextBrush}" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"/></Canvas></Viewbox><TextBlock Text="Atualizações" FontSize="19" FontWeight="SemiBold" Margin="26,0,0,0"/></StackPanel></Button>
+    </StackPanel>
+   </Grid>
+   <ScrollViewer Grid.Column="1" x:Name="DashboardScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><Grid Margin="28,22,30,36" MinWidth="650"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+    <Grid Grid.Row="0" Margin="0,0,0,26"><StackPanel><TextBlock Text="Máquinas" FontSize="31" FontWeight="SemiBold"/><TextBlock Text="Compartilhe mouse e teclado entre PCs Windows na sua rede local." FontSize="17" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"/></StackPanel><Button x:Name="PairNowButton" Style="{StaticResource PrimaryWideButton}" Width="264" HorizontalAlignment="Right" VerticalAlignment="Center" Click="PairNowButton_Click" AutomationProperties.Name="Vincular máquina"><Grid HorizontalAlignment="Center" VerticalAlignment="Center"><Grid.ColumnDefinitions><ColumnDefinition Width="24"/><ColumnDefinition Width="14"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Viewbox Grid.Column="0" Width="24" Height="24"><Path Data="M12,3 L12,21 M3,12 L21,12" Stroke="#0E2014" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/></Viewbox><TextBlock Grid.Column="2" Text="Vincular máquina" FontSize="19" FontWeight="SemiBold" VerticalAlignment="Center"/></Grid></Button></Grid>
+    <StackPanel Grid.Row="1">
+     <Grid x:Name="LocalMachineRow" Style="{StaticResource MachineRowActive}"><Grid.ColumnDefinitions><ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="132"/><ColumnDefinition Width="1"/><ColumnDefinition Width="255"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions><Rectangle Width="6" Fill="{StaticResource AccentBrush}" HorizontalAlignment="Left"/><Viewbox Grid.Column="0" Width="43" Height="43" HorizontalAlignment="Center"><Path Data="M3,3 L30,3 30,22 3,22 Z M12,29 L22,29 M17,22 L17,29" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox><StackPanel Grid.Column="1" VerticalAlignment="Center"><StackPanel Orientation="Horizontal"><TextBlock x:Name="LocalNameText" Text="PC Principal" FontSize="22" FontWeight="SemiBold"/><Border Background="#234B31" CornerRadius="18" Padding="13,5" Margin="20,0,0,0"><StackPanel Orientation="Horizontal"><Ellipse Width="11" Height="11" Fill="{StaticResource AccentBrush}" Margin="0,0,8,0"/><TextBlock Text="Ativa" Foreground="{StaticResource AccentStrongBrush}" FontSize="15"/></StackPanel></Border></StackPanel><TextBlock x:Name="LocalAddressText" Text="Este computador" FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,7,0,0"/><TextBlock Text="Este computador" FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0"/></StackPanel><StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center"><Viewbox Width="30" Height="30" Margin="0,0,28,0"><Path Data="M6,9 A7,7 0 1 1 20,9 L20,22 A7,7 0 0 1 6,22 Z M13,2 L13,9" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox><Viewbox Width="34" Height="34"><Path Data="M2,7 L30,7 30,25 2,25 Z M7,12 L9,12 M12,12 L14,12 M17,12 L19,12 M22,12 L24,12 M7,18 L25,18" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox></StackPanel><Rectangle Grid.Column="3" Width="1" Height="42" Fill="#536062"/><StackPanel Grid.Column="4" VerticalAlignment="Center" Margin="30,0,0,0"><TextBlock Text="Recebendo entrada" FontSize="17"/><TextBlock Text="Disponível nesta sessão" FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/></StackPanel><TextBlock Grid.Column="5" Text="›" FontSize="44" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" HorizontalAlignment="Center"/></Grid>
+     <Grid x:Name="RemoteMachineRow" Style="{StaticResource MachineRow}" Visibility="Collapsed" MouseLeftButtonUp="RemoteMachineRow_MouseLeftButtonUp"><Grid.ColumnDefinitions><ColumnDefinition Width="98"/><ColumnDefinition Width="*"/><ColumnDefinition Width="132"/><ColumnDefinition Width="1"/><ColumnDefinition Width="255"/><ColumnDefinition Width="42"/></Grid.ColumnDefinitions><Viewbox Grid.Column="0" Width="43" Height="43" HorizontalAlignment="Center"><Path Data="M4,2 L29,2 29,21 4,21 Z M1,26 L32,26 M7,21 L5,26 M26,21 L29,26" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox><StackPanel Grid.Column="1" VerticalAlignment="Center"><StackPanel Orientation="Horizontal"><TextBlock x:Name="RemoteNameText" Text="Máquina vinculada" FontSize="22" FontWeight="SemiBold"/><Border x:Name="RemoteStatusBadge" Background="#29343D" CornerRadius="18" Padding="13,5" Margin="20,0,0,0"><StackPanel Orientation="Horizontal"><Ellipse x:Name="RemoteDot" Width="11" Height="11" Fill="#AFC9E3" Margin="0,0,8,0"/><TextBlock x:Name="RemoteBadgeText" Text="Disponível" Foreground="#C7D8E8" FontSize="15"/></StackPanel></Border></StackPanel><TextBlock x:Name="RemoteAddressText" Text="Endereço da rede local" FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,7,0,0"/><TextBlock x:Name="RemoteStateText" Text="Pronto para receber entrada" FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0"/></StackPanel><StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" HorizontalAlignment="Center"><Viewbox Width="30" Height="30" Margin="0,0,28,0"><Path Data="M6,9 A7,7 0 1 1 20,9 L20,22 A7,7 0 0 1 6,22 Z M13,2 L13,9" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox><Viewbox Width="34" Height="34"><Path Data="M2,7 L30,7 30,25 2,25 Z M7,12 L9,12 M12,12 L14,12 M17,12 L19,12 M22,12 L24,12 M7,18 L25,18" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox></StackPanel><Rectangle Grid.Column="3" Width="1" Height="42" Fill="#536062"/><StackPanel Grid.Column="4" VerticalAlignment="Center" Margin="30,0,0,0"><TextBlock x:Name="TargetStateText" Text="Aguardando atalho" FontSize="17"/><TextBlock x:Name="LatencyText" Text="Ainda não conectado" FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,5,0,0"/></StackPanel><TextBlock Grid.Column="5" Text="›" FontSize="44" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" HorizontalAlignment="Center"/></Grid>
+     <Border x:Name="NoPeersState" Background="{StaticResource SurfaceBrush}" Padding="30,24" Margin="0,6,0,0"><StackPanel Orientation="Horizontal"><Viewbox Width="37" Height="37"><Path Data="M4,4 L28,4 28,21 4,21 Z M12,27 L20,27 M16,21 L16,27" Stroke="{StaticResource MutedBrush}" StrokeThickness="1.7"/></Viewbox><StackPanel Margin="22,0,0,0"><TextBlock Text="Nenhuma máquina vinculada" FontSize="18" FontWeight="SemiBold"/><TextBlock Text="Vincule uma máquina nesta rede para disponibilizá-la aqui." FontSize="14" Foreground="{StaticResource MutedBrush}" Margin="0,4,0,0"/></StackPanel></StackPanel></Border>
+    </StackPanel>
+    <Grid Grid.Row="2" Margin="0,34,0,0"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+     <StackPanel x:Name="ShortcutsSection"><Grid><StackPanel Orientation="Horizontal"><Viewbox Width="34" Height="34"><Path Data="M2,8 L30,8 30,26 2,26 Z M7,13 L9,13 M12,13 L14,13 M17,13 L19,13 M22,13 L24,13 M7,19 L25,19" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox><StackPanel Margin="20,0,0,0"><TextBlock Text="Atalhos de alternância" FontSize="23" FontWeight="SemiBold"/><TextBlock Text="Pressione o atalho global para mover o mouse e o teclado para outra máquina." FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"/></StackPanel></StackPanel><Button Style="{StaticResource TextActionButton}" HorizontalAlignment="Right" Click="ShortcutsButton_Click" Content="Editar atalhos"/></Grid>
+      <Grid Background="{StaticResource SurfaceBrush}" Margin="0,14,0,0"><Grid.RowDefinitions><RowDefinition Height="54"/><RowDefinition Height="54"/></Grid.RowDefinitions><Grid.ColumnDefinitions><ColumnDefinition Width="400"/><ColumnDefinition Width="80"/><ColumnDefinition Width="74"/><ColumnDefinition Width="*"/><ColumnDefinition Width="130"/></Grid.ColumnDefinitions>
+       <StackPanel Grid.Row="0" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="24,0,0,0"><Border Style="{StaticResource Keycap}"><TextBlock Text="Ctrl"/></Border><TextBlock Text="+" Style="{StaticResource PlusText}"/><Border Style="{StaticResource Keycap}"><TextBlock Text="Shift"/></Border><TextBlock Text="+" Style="{StaticResource PlusText}"/><Border Style="{StaticResource Keycap}"><TextBlock Text="Alt"/></Border><TextBlock Text="+" Style="{StaticResource PlusText}"/><Border Style="{StaticResource Keycap}"><TextBlock x:Name="LocalHotkeyText" Text="1"/></Border></StackPanel><TextBlock Grid.Row="0" Grid.Column="1" Text="→" FontSize="31" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" HorizontalAlignment="Center"/><TextBlock Grid.Row="0" Grid.Column="3" x:Name="LocalShortcutTargetText" Text="Este computador" FontSize="17" VerticalAlignment="Center"/><Border Grid.Row="0" Grid.Column="4" Background="#234B31" CornerRadius="16" Padding="13,5" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,20,0"><TextBlock Text="Ativo" Foreground="{StaticResource AccentStrongBrush}" FontSize="14"/></Border>
+       <Rectangle Grid.Row="1" Grid.ColumnSpan="5" Height="1" Fill="#273034" VerticalAlignment="Top"/><StackPanel Grid.Row="1" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="24,0,0,0"><Border Style="{StaticResource Keycap}"><TextBlock Text="Ctrl"/></Border><TextBlock Text="+" Style="{StaticResource PlusText}"/><Border Style="{StaticResource Keycap}"><TextBlock Text="Shift"/></Border><TextBlock Text="+" Style="{StaticResource PlusText}"/><Border Style="{StaticResource Keycap}"><TextBlock Text="Alt"/></Border><TextBlock Text="+" Style="{StaticResource PlusText}"/><Border Style="{StaticResource Keycap}"><TextBlock x:Name="RemoteHotkeyText" Text="2"/></Border></StackPanel><TextBlock Grid.Row="1" Grid.Column="1" Text="→" FontSize="31" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" HorizontalAlignment="Center"/><TextBlock Grid.Row="1" Grid.Column="3" x:Name="RemoteShortcutTargetText" Text="Máquina vinculada" FontSize="17" VerticalAlignment="Center"/><Border Grid.Row="1" Grid.Column="4" x:Name="RemoteShortcutBadge" Background="#29343D" CornerRadius="16" Padding="13,5" VerticalAlignment="Center" HorizontalAlignment="Right" Margin="0,0,20,0"><TextBlock x:Name="RemoteShortcutStatusText" Text="Configurado" Foreground="#C7D8E8" FontSize="14"/></Border>
+      </Grid>
+     </StackPanel>
+     <StackPanel Grid.Row="1" x:Name="LogSection" Margin="0,31,0,0"><Grid><StackPanel Orientation="Horizontal"><Viewbox Width="34" Height="34"><Path Data="M5,2 L16,2 23,9 23,28 5,28 Z M16,2 L16,9 23,9 M9,15 L19,15 M9,21 L19,21" Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"/></Viewbox><StackPanel Margin="20,0,0,0"><TextBlock Text="Registro de entrada" FontSize="23" FontWeight="SemiBold"/><TextBlock Text="Eventos recentes de mouse e teclado na rede. Os conteúdos digitados não são exibidos." FontSize="15" Foreground="{StaticResource MutedBrush}" Margin="0,3,0,0"/></StackPanel></StackPanel><Button Style="{StaticResource TextActionButton}" HorizontalAlignment="Right" Click="ClearLogButton_Click" Content="Limpar"/></Grid><DataGrid x:Name="LogList" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" CanUserResizeRows="False" IsReadOnly="True" HeadersVisibility="Column" GridLinesVisibility="None" Margin="0,14,0,0" MinHeight="156" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><DataGrid.Columns><DataGridTextColumn Header="Horário" Binding="{Binding TimestampUtc, StringFormat={}{0:HH:mm:ss}}" Width="1.05*"/><DataGridTextColumn Header="Origem" Binding="{Binding Origin}" Width="1.25*"/><DataGridTextColumn Header="Destino" Binding="{Binding Destination}" Width="1.25*"/><DataGridTextColumn Header="Evento" Binding="{Binding Type}" Width="1.55*"/><DataGridTextColumn Header="Status" Binding="{Binding Status}" Width="1.05*"/></DataGrid.Columns></DataGrid><TextBlock x:Name="LogStatusText" Text="0 eventos nesta sessão" FontSize="12" Foreground="{StaticResource MutedBrush}" Margin="0,10,0,0"/></StackPanel>
     </Grid>
+   </Grid></ScrollViewer>
+   <Grid x:Name="PairingOverlay" Grid.ColumnSpan="2" Grid.RowSpan="2" Background="#B8101519" Visibility="Collapsed"><Border Width="575" Background="{StaticResource RaisedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="34,31"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Button Style="{StaticResource OverlayCloseButton}" Content="×" HorizontalAlignment="Right" VerticalAlignment="Top" Click="ClosePairingButton_Click"/><StackPanel><TextBlock Text="Vincular máquina" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Conecte um PC da mesma rede e confirme o mesmo código nos dois dispositivos." FontSize="15" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,7,45,0"/></StackPanel><StackPanel Grid.Row="1" Margin="0,25,0,0"><TextBlock Text="ENDEREÇO DA MÁQUINA" FontSize="11" Foreground="{StaticResource MutedBrush}"/><TextBox x:Name="RemoteAddressBox" AutomationProperties.Name="Endereço da máquina"/><Button x:Name="ConnectPairButton" Style="{StaticResource PrimaryWideButton}" Content="Conectar e vincular" HorizontalAlignment="Left" Click="ConnectPairButton_Click"/></StackPanel><Border Grid.Row="2" Background="{StaticResource SurfaceBrush}" Padding="22" Margin="0,23,0,18"><StackPanel HorizontalAlignment="Center"><TextBlock Text="CÓDIGO COMPARTILHADO" FontSize="11" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/><TextBlock x:Name="PairCodeText" Text="—— ——" FontSize="32" FontWeight="SemiBold" Foreground="{StaticResource AccentStrongBrush}" HorizontalAlignment="Center" Margin="0,8,0,2"/><TextBlock x:Name="PairCodeStateText" Text="Aguardando uma oferta remota" FontSize="13" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center"/></StackPanel></Border><StackPanel Grid.Row="3" Orientation="Horizontal"><Button x:Name="ConfirmPairButton" Style="{StaticResource PrimaryWideButton}" Content="Confirmar código" IsEnabled="False" Click="ConfirmPairButton_Click"/><Button Style="{StaticResource QuietButton}" Content="Como funciona" Click="HowPairingButton_Click"/></StackPanel></Grid></Border></Grid>
+   <Grid x:Name="HotkeyOverlay" Grid.ColumnSpan="2" Grid.RowSpan="2" Background="#B8101519" Visibility="Collapsed"><Border Width="560" Background="{StaticResource RaisedBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" Padding="34,31"><Grid><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><Button Style="{StaticResource OverlayCloseButton}" Content="×" HorizontalAlignment="Right" VerticalAlignment="Top" Click="CancelHotkeysButton_Click"/><StackPanel><TextBlock Text="Editar atalhos" FontSize="27" FontWeight="SemiBold"/><TextBlock Text="Use Ctrl + Shift + Alt + uma tecla. Os atalhos globais são aplicados imediatamente ao salvar." FontSize="15" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,7,44,0"/></StackPanel><StackPanel Grid.Row="1" Margin="0,26,0,0"><TextBlock Text="ESTE COMPUTADOR" FontSize="11" Foreground="{StaticResource MutedBrush}"/><TextBox x:Name="LocalHotkeyBox" AutomationProperties.Name="Atalho deste computador"/><TextBlock Text="MÁQUINA VINCULADA" FontSize="11" Foreground="{StaticResource MutedBrush}" Margin="0,7,0,0"/><TextBox x:Name="RemoteHotkeyBox" AutomationProperties.Name="Atalho da máquina vinculada"/><TextBlock x:Name="HotkeyErrorText" Foreground="#FF9C9C" FontSize="13" TextWrapping="Wrap" Visibility="Collapsed" Margin="0,2,0,0"/></StackPanel><StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,24,0,0"><Button Style="{StaticResource QuietButton}" Content="Cancelar" Click="CancelHotkeysButton_Click"/><Button Style="{StaticResource PrimaryWideButton}" Content="Salvar atalhos" Click="SaveHotkeysButton_Click" Margin="10,0,0,0"/></StackPanel></Grid></Border></Grid>
+  </Grid>
+ </Grid>
 </Window>
