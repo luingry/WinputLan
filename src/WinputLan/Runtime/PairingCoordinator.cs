@@ -38,7 +38,7 @@ namespace WinputLan.Runtime
         {
             if (_role != PairingRole.Controller) throw new InvalidOperationException("Only a controller may request access.");
             _submittedCode = WinputLan.Core.AccessCode.Normalize(accessCode);
-            if (!WinputLan.Core.AccessCode.IsValid(_submittedCode)) throw new InvalidOperationException("Informe o código de acesso de 16 caracteres.");
+            if (!WinputLan.Core.AccessCode.IsValid(_submittedCode)) throw new InvalidOperationException("Informe o código de acesso de " + WinputLan.Core.AccessCode.Length + " caracteres.");
             NewNonce(out _controllerNonce); if (_transport.State == PeerConnectionState.Pairing) _ = SendOfferAsync();
         }
         public void CancelRequest() { if (_role == PairingRole.Controller) { _submittedCode = null; _offerSent = false; _transcript = null; _targetNonce = null; _completed = false; } }

@@ -22,10 +22,14 @@ pixel deltas); consecutive unsent deltas are summed, never dropped. The target
 adds them to a tracked cursor and injects an exact absolute position in physical
 pixels. Legacy absolute `MouseMove` (kind 1) is still accepted.
 
-The controlled machine generates and displays a 16-character, unambiguous
-Base32 CSPRNG access code (80 bits), formatted `XXXX XXXX XXXX XXXX`, below its
+The controlled machine generates and displays a 6-character, unambiguous
+Base32 CSPRNG access code (30 bits), formatted `XXX XXX`, below its
 LAN IPv4 address. The code is never sent on the wire or written to logs/pins.
-This is high-entropy certificate/nonce-bound challenge-response, not PAKE.
+This is certificate/nonce-bound challenge-response, not PAKE. The short code is
+acceptable because the controller must prove knowledge first (the target never
+reveals a code-derived value before a person accepts), each guess costs a new
+TLS session, three failures block attempts for 30 s, the code rotates every
+10 minutes, and a valid code still requires explicit approval on the target.
 
 The controller sends `PairingOffer` `offer|controllerDeviceId|base64(displayName)|controllerNonce`.
 The target returns `PairingConfirm` `challenge|targetDeviceId|targetNonce`.

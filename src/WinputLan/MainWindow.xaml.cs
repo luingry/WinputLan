@@ -183,12 +183,13 @@ namespace WinputLan
         private void MaximizeButton_Click(object sender, RoutedEventArgs e) { WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; }
         private void CloseButton_Click(object sender, RoutedEventArgs e) { Close(); }
         private void RemoteMachineRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) { SetInputTarget(true); }
+        private void RemoteCodeBox_Submitted(object sender, EventArgs e) { if (ConnectPairButton.IsEnabled) ConnectPairButton_Click(sender, new RoutedEventArgs()); }
         private async void ConnectPairButton_Click(object sender, RoutedEventArgs e)
         {
             var host = (RemoteAddressBox.Text ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(host)) { MessageBox.Show("Enter a peer address.", "Pairing", MessageBoxButton.OK, MessageBoxImage.Information); return; }
-            try { _pairingCoordinator.StartRequest(RemoteCodeBox.Text); }
-            catch (Exception ex) { PairCodeStateText.Text = ex.Message; RemoteCodeBox.Focus(); return; }
+            try { _pairingCoordinator.StartRequest(RemoteCodeBox.Code); }
+            catch (Exception ex) { PairCodeStateText.Text = ex.Message; RemoteCodeBox.FocusFirstEmpty(); return; }
             _config.RemoteAddress = host;
             _outboundRequestCts?.Cancel(); var requestCts = new CancellationTokenSource(); _outboundRequestCts = requestCts;
             try
@@ -324,7 +325,7 @@ namespace WinputLan
             PairingOverlay.Visibility = Visibility.Visible;
             ControllerPairPanel.Visibility = Visibility.Visible; TargetApprovalPanel.Visibility = Visibility.Collapsed;
             PairingTitleText.Text = "Controlar outra máquina"; PairingDescriptionText.Text = "Informe o IP e o código exibidos no PC que você quer controlar.";
-            PairCodeStateText.Text = "O PC controlado precisa aceitar o pedido."; RemoteAddressBox.Focus(); AddLog("local", "remote", "Access", "ready");
+            PairCodeStateText.Text = "O PC controlado precisa aceitar o pedido."; RemoteCodeBox.Clear(); RemoteAddressBox.Focus(); AddLog("local", "remote", "Access", "ready");
         }
 
         private void RefreshKnownPeer()

@@ -80,7 +80,9 @@ namespace WinputLan.Tests
         private static void TestAccessProof()
         {
             var code = AccessCode.Generate();
-            Assert(AccessCode.IsValid(code) && AccessCode.Format(code).Split(' ').Length == 4, "access code is a grouped 16-character Base32 value");
+            Assert(AccessCode.IsValid(code) && code.Length == 6 && AccessCode.Format(code).Split(' ').Length == 2, "access code is a grouped 6-character value");
+            Assert(!AccessCode.IsValid("ABCDE") && !AccessCode.IsValid("ABCDE0") && !AccessCode.IsValid("ABCDEFG"), "wrong length and look-alike symbols are rejected");
+            TestAccessCodeMask();
             var controllerNonce = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
             var targetNonce = Enumerable.Range(32, 32).Select(i => (byte)i).ToArray();
             var directTranscript = AccessProof.CanonicalTranscript("controller", "target", "controller-fingerprint", "target-fingerprint", controllerNonce, targetNonce);
@@ -198,6 +200,22 @@ namespace WinputLan.Tests
             Assert(routing.Release(ctrl) == InputRoute.Local && routing.Release(left) == InputRoute.Local, "remote presses are forgotten after ReleaseAll");
             Assert(routing.Continuous() == InputRoute.Local && routing.Press(two) == InputRoute.Local, "local machine owns input again");
             Assert(InputRoutingState.ButtonId(0x0201) != InputRoutingState.KeyId(0x01), "button ids never collide with virtual keys");
+        }
+
+        private static void TestAccessCodeMask()
+        {
+            var mask = new AccessCodeMask();
+            Assert(mask.Input(0, "a") == 1 && mask[0] == 'A', "typing uppercases and advances");
+            Assert(mask.Input(1, "0") == 1 && !mask[1].HasValue, "look-alike symbols are ignored without moving");
+            mask.Input(1, "b"); mask.Input(2, "c");
+            Assert(mask.Backspace(3) == 2 && !mask[2].HasValue, "backspace on an empty slot clears the previous and moves back");
+            Assert(mask.Backspace(2) == 1 && !mask[1].HasValue && mask[0] == 'A', "backspace keeps moving back");
+            Assert(mask.Input(1, "k7m-x9p") == 5 && mask.Value == "K7MX9P" && mask.IsComplete, "pasting a full code fills from the first slot and focuses the last");
+            Assert(mask.Input(5, "z") == 5 && mask.Value == "K7MX9Z", "typing in the last slot replaces it and stays");
+            Assert(mask.Delete(2) == 2 && mask.Value == "K7X9Z" && !mask.IsComplete && mask.FirstEmpty() == 2, "delete clears in place");
+            mask.Clear();
+            Assert(mask.Value == "" && mask.Backspace(0) == 0, "clear empties every slot");
+            Assert(AccessCode.IsValid(AccessCode.Normalize("k7m x9p")), "normalized typed code is valid");
         }
 
         private static void TestElevationPolicy()
