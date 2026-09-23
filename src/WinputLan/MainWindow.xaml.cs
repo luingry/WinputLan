@@ -394,6 +394,7 @@ namespace WinputLan
             ApplyRow(model.Other, RemoteMachineRow, RemoteRowAccent, RemoteStatusBadge, RemoteDot, RemoteBadgeText, RemoteControllerBadge, RemoteNameText, RemoteAddressText, RemoteStateText, TargetStateText, LatencyText);
             if (model.Other.Visible && !inbound && outbound == OutboundSession.None && !string.IsNullOrWhiteSpace(_outboundNote)) LatencyText.Text = _outboundNote;
             NoPeersState.Visibility = model.Other.Visible ? Visibility.Collapsed : Visibility.Visible;
+            DisconnectButton.Visibility = outbound != OutboundSession.None || inbound ? Visibility.Visible : Visibility.Collapsed;
             var hasTarget = target != null || legacyPeer;
             RemoteShortcutTargetText.Text = hasTarget ? (target != null && !string.IsNullOrWhiteSpace(target.DisplayName) ? target.DisplayName : "Máquina vinculada") : "Nenhuma máquina";
             LocalShortcutTargetText.Text = string.IsNullOrWhiteSpace(_config.DisplayName) ? "Este computador" : _config.DisplayName + " (este PC)";
@@ -454,6 +455,18 @@ namespace WinputLan
                 _outboundNote = ex is OperationCanceledException ? "Pedido cancelado." : TargetDisplayName + " não respondeu. Verifique se o Winput LAN está aberto nela.";
                 AddLog("local", "remote", "Transport", "failed"); RenderMachines();
             }
+        }
+
+        // Ends every live session; trust is kept, so the next connection is still recognized (and auto-accepted if enabled).
+        private void DisconnectButton_Click(object sender, RoutedEventArgs e)
+        {
+            SetInputTarget(false);
+            StopControllerCapture();
+            var outbound = _transport.State != PeerConnectionState.Offline;
+            if (outbound) { _outboundRequestCts?.Cancel(); _pairingCoordinator?.CancelRequest(); _transport.Disconnect("desconectado pelo usuário"); _outboundNote = "Desconectado. Clique para conectar novamente."; }
+            if (_listenerTransport != null && _listenerTransport.State == PeerConnectionState.Connected) _listenerTransport.Disconnect("desconectado pelo usuário");
+            AddLog("local", "remote", "Transport", "user-disconnected");
+            RenderMachines();
         }
 
         private void CancelOutboundRequest(string note)

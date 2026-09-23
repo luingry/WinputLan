@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.7] - 2026-09-23
+
+### Added
+
+- Red "Desconectar" button (Lucide unlink icon) to the left of "Conectar outra máquina", shown only while a session or request is active. It closes the connection on either side and returns input to this PC. Trust is kept: reconnecting is still recognized and honours automatic acceptance.
+
 ## [0.3.6] - 2026-09-23
 
 ### Added
