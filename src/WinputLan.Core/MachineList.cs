@@ -79,7 +79,8 @@ namespace WinputLan.Core
             local.IsActive = !focused;
             local.Badge = local.IsActive ? "Ativa" : "Disponível";
             local.Status = focused ? "Enviando entrada" : "Recebendo entrada";
-            local.Detail = focused ? "Volte com " + Or(input.LocalHotkey, "o atalho") : connected ? "Envie com " + Or(input.RemoteHotkey, "o atalho") : "Mouse e teclado deste PC";
+            // The shortcut hint belongs on the machine opposite to the one receiving input.
+            local.Detail = focused ? "Volte com " + Or(input.LocalHotkey, "o atalho") : "Mouse e teclado deste PC";
             if (!hasTarget) return new MachineListModel { Local = local, Other = other };
 
             other.Visible = true;

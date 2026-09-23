@@ -226,6 +226,7 @@ namespace WinputLan.Tests
             var idle = MachineListState.Build(controller);
             Assert(idle.Local.IsActive && !idle.Other.IsActive && idle.Local.IsController && !idle.Other.IsController, "connected but local: this PC is active and marked as controller");
             Assert(idle.Other.Name == "PC2" && idle.Other.Badge == "Disponível" && idle.Local.Status == "Recebendo entrada", "target shows its real name and is available");
+            Assert(idle.Local.Detail == "Mouse e teclado deste PC" && idle.Other.Detail.Contains("Ctrl+Shift+Alt+2"), "shortcut hint only on the machine opposite to the one receiving input");
             controller.OutboundFocused = true;
             var sending = MachineListState.Build(controller);
             Assert(!sending.Local.IsActive && sending.Other.IsActive && sending.Other.Badge == "Ativa" && sending.Local.Status == "Enviando entrada" && sending.Other.Status == "Recebendo entrada", "active state and green follow the machine receiving input");
