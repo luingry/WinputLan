@@ -1,5 +1,17 @@
 # Errors and prevention
 
+## 2026-09-23 - Atalho de alternância conecta mas não troca o foco
+
+- Sintoma: com a máquina reconhecida desconectada, o atalho remoto abria a conexão, mas a entrada só ia para o alvo num segundo toque.
+- Causa raiz: `SetInputTarget(true)` só iniciava `ConnectRecognizedAsync` e retornava; nada lembrava a intenção quando a sessão ficava pronta.
+- Solução: flag `_switchToRemoteWhenReady`, consumida em `CompletePairing` (controlador) e limpa em Offline/Faulted ou em qualquer troca manual.
+
+## 2026-09-23 - PC controlado mostra "Máquina vinculada / Código novo necessário" após desconectar
+
+- Sintoma: no PC controlado, após encerrar a sessão, a linha da outra máquina perdia o nome e pedia código, embora o controlador continuasse confiável.
+- Causa raiz: fora de sessão, `MachineListState` só conhecia o `TrustedTarget` (direção controlador); o PC controlado guarda o parceiro em `TrustedControllers`.
+- Solução: `KnownControllerName/Address` no input da lista; sem alvo reconhecido, a linha mostra o controlador conhecido com "Aguardando conexão / Máquina já reconhecida".
+
 ## 2026-09-23 - Smoke visual reaponta a inicialização com o Windows para o build de dev
 
 - Sintoma: após abrir `src/WinputLan/bin/Release/net48/WinputLan.exe` para screenshot, `HKCU\...\Run\WinputLan` passou a apontar para o build de dev em vez de `C:\Program Files\Winput LAN\WinputLan.exe`.

@@ -59,6 +59,8 @@ namespace WinputLan
         private string _inboundControllerName;
         private string _outboundNote;
         private bool _suppressStartupToggle;
+        // Set when the switch shortcut starts a connection, so input moves to the target once it is ready.
+        private bool _switchToRemoteWhenReady;
         private Forms.NotifyIcon _trayIcon;
         private readonly BackgroundLifecycle _backgroundLifecycle;
         private readonly InputLatencyWindow _latencyWindow = new InputLatencyWindow();
@@ -202,6 +204,8 @@ namespace WinputLan
             // While another PC controls this one, the second row shows that controller and is informational.
             if (_listenerTransport != null && _listenerTransport.State == PeerConnectionState.Connected && _transport.State != PeerConnectionState.Connected) return;
             if (_transport.State == PeerConnectionState.Connected) { SetInputTarget(true); return; }
+            // Idle row for a known controller: it connects to this PC, so the row only informs.
+            if (_transport.State == PeerConnectionState.Offline && !HasRecognizedTarget && KnownController != null) return;
             if (_transport.State == PeerConnectionState.Connecting || _transport.State == PeerConnectionState.Pairing) { CancelOutboundRequest("Pedido cancelado."); return; }
             if (HasRecognizedTarget) { _ = ConnectRecognizedAsync(); return; }
             BeginPairing();
@@ -369,6 +373,8 @@ namespace WinputLan
 
         private void RefreshKnownPeer() { RenderMachines(); }
 
+        // Most recent controller this PC trusts (the list is kept newest first).
+        private TrustedPeer KnownController { get { return _config.TrustedControllers == null ? null : _config.TrustedControllers.FirstOrDefault(p => p != null && p.ProtectedKey != null); } }
         private bool HasRecognizedTarget { get { var t = _config.TrustedTarget; return t != null && t.ProtectedKey != null && !string.IsNullOrWhiteSpace(t.Address) && !string.IsNullOrWhiteSpace(t.Fingerprint); } }
         private string TargetDisplayName { get { var t = _config.TrustedTarget; return t != null && !string.IsNullOrWhiteSpace(t.DisplayName) ? t.DisplayName : "a máquina vinculada"; } }
 
@@ -388,7 +394,9 @@ namespace WinputLan
                 TargetAddress = target != null ? target.Address : _config.RemoteAddress,
                 TargetRecognized = HasRecognizedTarget,
                 InboundConnected = inbound, InboundFocused = _inboundFocused,
-                ControllerName = _inboundControllerName, ControllerAddress = HostOnly(_listenerTransport == null ? null : _listenerTransport.RemoteEndpoint)
+                ControllerName = _inboundControllerName, ControllerAddress = HostOnly(_listenerTransport == null ? null : _listenerTransport.RemoteEndpoint),
+                KnownControllerName = KnownController == null ? null : string.IsNullOrWhiteSpace(KnownController.DisplayName) ? "PC controlador" : KnownController.DisplayName,
+                KnownControllerAddress = KnownController == null ? null : KnownController.Address
             });
             ApplyRow(model.Local, LocalMachineRow, LocalRowAccent, LocalStatusBadge, LocalDot, LocalBadgeText, LocalControllerBadge, LocalNameText, null, LocalSubtitleText, LocalStateText, LocalDetailText);
             ApplyRow(model.Other, RemoteMachineRow, RemoteRowAccent, RemoteStatusBadge, RemoteDot, RemoteBadgeText, RemoteControllerBadge, RemoteNameText, RemoteAddressText, RemoteStateText, TargetStateText, LatencyText);
@@ -604,7 +612,7 @@ namespace WinputLan
                 PairingOverlay.Visibility = Visibility.Collapsed;
                 RenderMachines();
                 AddLog("local", "remote", "Access", outbound ? "controller-ready" : "target-ready");
-                if (outbound) EnsureControllerCapture();
+                if (outbound) { EnsureControllerCapture(); if (_switchToRemoteWhenReady) SetInputTarget(true); }
             }
             catch { AddLog("local", "remote", "Pairing", "pin-save-failed"); }
         }
@@ -661,10 +669,11 @@ namespace WinputLan
             if (remote && (_transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend))
             {
                 // The shortcut on a disconnected but recognised target starts a reconnection request.
-                if (HasRecognizedTarget && _transport.State != PeerConnectionState.Connecting && _transport.State != PeerConnectionState.Pairing) _ = ConnectRecognizedAsync();
+                if (HasRecognizedTarget) { _switchToRemoteWhenReady = true; if (_transport.State != PeerConnectionState.Connecting && _transport.State != PeerConnectionState.Pairing) _ = ConnectRecognizedAsync(); }
                 AddLog("local", "remote", "Target", "blocked-unpaired");
                 return;
             }
+            _switchToRemoteWhenReady = false;
             _remoteActive = remote;
             _inputRouter?.SetRemoteActive(remote);
             _capture?.SetRemoteActive(remote);
@@ -678,7 +687,7 @@ namespace WinputLan
             {
                 // A lost session must hand the pinned cursor and keyboard back to this machine immediately.
                 if (state != PeerConnectionState.Connected && _remoteActive) SetInputTarget(false);
-                if (state == PeerConnectionState.Offline || state == PeerConnectionState.Faulted) { _capture?.Dispose(); _capture = null; }
+                if (state == PeerConnectionState.Offline || state == PeerConnectionState.Faulted) { _capture?.Dispose(); _capture = null; _switchToRemoteWhenReady = false; }
                 RenderMachines();
                 AddLog("remote", "local", "Transport", state.ToString());
             });

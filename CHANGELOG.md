@@ -5,6 +5,13 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.8] - 2026-09-23
+
+### Fixed
+
+- Connecting through the switch shortcut now also moves input to the other PC as soon as the session is ready, instead of needing a second press.
+- After a disconnect, the controlled PC keeps showing the known controller by name, as "Aguardando conexão · Máquina já reconhecida", instead of "Máquina vinculada · Código novo necessário".
+
 ## [0.3.7] - 2026-09-23
 
 ### Added

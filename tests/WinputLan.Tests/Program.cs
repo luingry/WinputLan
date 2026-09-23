@@ -254,6 +254,10 @@ namespace WinputLan.Tests
             Assert(!targetIdle.Local.IsActive && targetIdle.Other.IsActive && targetIdle.Local.Status == "Aguardando controle", "when control returns, the controller row turns active");
             var alone = MachineListState.Build(new MachineListInput { LocalName = "PC1" });
             Assert(alone.Local.IsActive && !alone.Other.Visible && !alone.Local.IsController, "without sessions only this PC is shown");
+            var knownController = MachineListState.Build(new MachineListInput { LocalName = "PC2", TargetName = "Máquina vinculada", KnownControllerName = "PC1", KnownControllerAddress = "10.0.0.1" });
+            Assert(knownController.Other.Visible && knownController.Other.Name == "PC1" && knownController.Other.Status == "Aguardando conexão" && knownController.Other.Detail == "Máquina já reconhecida" && knownController.Local.IsActive, "a disconnected known controller keeps its name and recognition");
+            var recognizedTarget = MachineListState.Build(new MachineListInput { LocalName = "PC1", TargetName = "PC2", TargetRecognized = true, KnownControllerName = "PC3" });
+            Assert(recognizedTarget.Other.Name == "PC2" && recognizedTarget.Other.Status == "Clique para conectar", "a recognized target takes precedence over a known controller");
         }
 
         private static void TestTrustedPeers()

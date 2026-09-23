@@ -24,6 +24,9 @@ namespace WinputLan.Core
         public bool InboundFocused { get; set; }
         public string ControllerName { get; set; }
         public string ControllerAddress { get; set; }
+        // A controller this PC already trusts, shown while idle when there is no recognized target to offer.
+        public string KnownControllerName { get; set; }
+        public string KnownControllerAddress { get; set; }
     }
 
     public sealed class MachineRowModel
@@ -81,6 +84,15 @@ namespace WinputLan.Core
             local.Status = focused ? "Enviando entrada" : "Recebendo entrada";
             // The shortcut hint belongs on the machine opposite to the one receiving input.
             local.Detail = focused ? "Volte com " + Or(input.LocalHotkey, "o atalho") : "Mouse e teclado deste PC";
+            if (input.Outbound == OutboundSession.None && !input.TargetRecognized && !string.IsNullOrWhiteSpace(input.KnownControllerName))
+            {
+                other = new MachineRowModel
+                {
+                    Visible = true, Name = input.KnownControllerName, Address = Or(input.KnownControllerAddress, "Rede local"),
+                    Badge = "Desconectada", Status = "Aguardando conexão", Detail = "Máquina já reconhecida", Subtitle = "Reconhecida"
+                };
+                return new MachineListModel { Local = local, Other = other };
+            }
             if (!hasTarget) return new MachineListModel { Local = local, Other = other };
 
             other.Visible = true;
