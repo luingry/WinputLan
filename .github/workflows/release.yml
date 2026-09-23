@@ -48,3 +48,14 @@ jobs:
           files: |
             artifacts/WinputLan-*/**
           fail_on_unmatched_files: true
+      # Only the newest release is kept to save storage quota; the updater reads releases/latest. Git tags stay.
+      - name: Delete older releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $current = '${{ github.ref_name }}'
+          gh release list --limit 1000 --json tagName --jq '.[].tagName' | Where-Object { $_ -and $_ -ne $current } | ForEach-Object {
+            gh release delete $_ --yes
+            if ($LASTEXITCODE -ne 0) { throw "Failed to delete release $_" }
+          }

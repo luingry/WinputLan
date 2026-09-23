@@ -26,4 +26,6 @@ The finalizer builds/tests, compiles the unsigned Inno Setup installer, writes i
 
 The `release.yml` workflow runs only for a `v<VERSION>` tag. It fails closed without `OTA_SIGNING_PRIVATE_KEY_PEM`, creates the setup and signed manifest, then attaches `artifacts/WinputLan-<VERSION>/**` to the GitHub release. The updater accepts only the pinned GitHub hosts, an exact newer versioned setup name, signed canonical metadata, and matching SHA-256.
 
+Only the newest release is kept, to save storage quota: after publishing, the workflow deletes every other GitHub release (their git tags stay). The updater only reads `releases/latest`, so older releases are not needed.
+
 The installer and application are intentionally unsigned by default. Authenticode is optional and can improve SmartScreen reputation, but is not a substitute for the RSA OTA verification.
