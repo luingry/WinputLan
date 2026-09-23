@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-09-23
+
+### Fixed
+
+- Shift combined with navigation keys (Home, End, arrows, Page Up/Down, Insert, Delete) now selects text on the controlled PC. Extended keys were injected as their numeric-keypad twins, and with Num Lock on Windows released Shift around them.
+
+### Changed
+
+- Heartbeat every 3 seconds (was 5); a lost link is detected after 9 seconds without reply (was 15).
+
 ## [0.3.2] - 2026-09-23
 
 ### Changed

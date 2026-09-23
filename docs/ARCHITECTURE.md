@@ -16,7 +16,8 @@ certificates, sockets, firewall, updater, and the UI.
 There is no service process and no elevation requirement. A listener uses the
 single configured TCP port. A connection is `TcpClient.NoDelay` plus `SslStream`
 with TLS 1.2 and client certificates on both sides. Frame reading runs off the
-connect caller; a five-second heartbeat is sent while connected. Access sessions
+connect caller; a three-second heartbeat is sent while connected and
+the link drops after nine seconds without an acknowledgement. Access sessions
 remain explicit: the controlled PC displays its IP above a renewable 80-bit,
 16-character Base32 code. PairingCoordinator uses a challenge-response HMAC
 over both certificate fingerprints and fresh nonces before exposing a passive

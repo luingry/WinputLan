@@ -105,6 +105,23 @@ namespace WinputLan.Core
         }
     }
 
+    public static class KeyInjection
+    {
+        // Key events carry the controller's raw KBDLLHOOKSTRUCT flags; LLKHF_EXTENDED is bit 0.
+        public const uint HookExtendedFlag = 0x01;
+        public const uint SendInputExtendedKey = 0x0001;
+        public const uint SendInputKeyUp = 0x0002;
+
+        // Without KEYEVENTF_EXTENDEDKEY, Home/End/arrows/Ins/Del/PgUp/PgDn are injected as their numpad twins;
+        // with NumLock on, Windows then fakes a Shift release around them, so Shift+Home/End stop selecting.
+        public static uint SendInputFlags(InputKind kind, uint hookFlags)
+        {
+            if (kind != InputKind.KeyDown && kind != InputKind.KeyUp) throw new ArgumentException("Key event must be down or up.", "kind");
+            var flags = (hookFlags & HookExtendedFlag) != 0 ? SendInputExtendedKey : 0U;
+            return kind == InputKind.KeyUp ? flags | SendInputKeyUp : flags;
+        }
+    }
+
     public static class ProtocolConstants
     {
         public const ushort Magic = 0x4C57; // bytes "WL" in little-endian order

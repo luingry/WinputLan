@@ -16,6 +16,7 @@ namespace WinputLan.Tests
         {
             Run("frame round-trip and bounds", TestFrames);
             Run("wheel delta wire preservation", TestWheel);
+            Run("extended keys keep their flag through injection", TestExtendedKeyInjection);
             Run("pairing transcript, SAS and HKDF", TestPairing);
             Run("access proof rejects certificate substitution", TestAccessProof);
             Run("pin store abstraction", TestPins);
@@ -100,6 +101,17 @@ namespace WinputLan.Tests
             var wheel = InputEvent.MouseWheel(-120, DateTime.UtcNow.Ticks);
             var decoded = FrameCodec.DecodeInput(FrameCodec.EncodeInput(wheel));
             Assert(decoded.Kind == InputKind.MouseWheel && unchecked((short)decoded.MouseData) == -120, "wheel delta survives the wire record");
+        }
+
+        private static void TestExtendedKeyInjection()
+        {
+            // Home (VK 0x24) from the navigation cluster: LLKHF_EXTENDED set, plus unrelated hook bits (0x20 alt, 0x80 up).
+            var home = FrameCodec.DecodeInput(FrameCodec.EncodeInput(InputEvent.Key(InputKind.KeyDown, 0x24, 0x47, 0x01 | 0x20, DateTime.UtcNow.Ticks)));
+            Assert(KeyInjection.SendInputFlags(home.Kind, home.Flags) == KeyInjection.SendInputExtendedKey, "extended key down keeps KEYEVENTF_EXTENDEDKEY only");
+            Assert(KeyInjection.SendInputFlags(InputKind.KeyUp, 0x01 | 0x80) == (KeyInjection.SendInputExtendedKey | KeyInjection.SendInputKeyUp), "extended key up");
+            Assert(KeyInjection.SendInputFlags(InputKind.KeyDown, 0) == 0, "Shift/letters inject without extra flags");
+            Assert(KeyInjection.SendInputFlags(InputKind.KeyUp, 0x80) == KeyInjection.SendInputKeyUp, "plain key up");
+            Expect<ArgumentException>(() => KeyInjection.SendInputFlags(InputKind.MouseWheel, 0));
         }
 
         private static void TestPins()

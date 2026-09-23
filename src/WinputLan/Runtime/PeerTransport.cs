@@ -31,7 +31,7 @@ namespace WinputLan.Runtime
         private volatile bool _allowsInputSend;
         private volatile bool _allowsInputReceive;
 
-        public PeerTransport() : this(TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(15), true) { }
+        public PeerTransport() : this(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(9), true) { }
         public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout) : this(heartbeatInterval, heartbeatTimeout, true) { }
         public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout, bool respondToHeartbeats)
         {

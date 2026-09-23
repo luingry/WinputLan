@@ -166,3 +166,10 @@
 
 - **Causa (texto):** o estilo implícito de `TextBlock` no `App.xaml` força `TextBrush` em todo texto, inclusive dentro de botões. **Solução:** `Style.Resources` nos estilos de botão fazem o TextBlock herdar o `Foreground` do botão.
 - **Causa (X):** o título do modal fica na mesma célula do Grid e é declarado depois do botão, ficando por cima dele. **Solução:** `Panel.ZIndex` alto e área de 44x44 no estilo `OverlayCloseButton`.
+
+## Shift+Home / Shift+End não selecionam no PC controlado (0.3.3)
+
+- **Sintoma:** atalhos com Shift + teclas de navegação (Home, End, setas, PgUp/PgDn, Ins, Del) não selecionavam texto no PC controlado; Shift + letras funcionava.
+- **Causa:** o hook capturava `LLKHF_EXTENDED` em `InputEvent.Flags`, mas o `SendInputSink` injetava só `KEYEVENTF_KEYUP`, descartando `KEYEVENTF_EXTENDEDKEY`. Sem ele, o Windows trata essas teclas como as do teclado numérico; com Num Lock ligado, injeta um Shift solto falso em volta delas e a seleção vira movimento simples.
+- **Solução:** `KeyInjection.SendInputFlags` (Core) converte o bit estendido do hook em `KEYEVENTF_EXTENDEDKEY`; o fail-safe `ReleaseAll` guarda as flags de cada tecla pressionada para soltá-la com o mesmo bit.
+- **Prevenção:** toda injeção de teclado deve preservar o bit estendido; o teste `extended keys keep their flag through injection` cobre o mapeamento e a passagem pelo fio.

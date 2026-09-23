@@ -207,7 +207,8 @@ namespace WinputLan.Runtime
         public const uint HorizontalWheelFlag = 1;
         // After this idle gap the virtual cursor resyncs with the real one, which the local user may have moved.
         private const int CursorResyncMs = 250;
-        private readonly HashSet<ushort> _pressedKeys = new HashSet<ushort>();
+        // Pressed key -> its hook flags, so a fail-safe release keeps the extended-key bit of the original press.
+        private readonly Dictionary<ushort, uint> _pressedKeys = new Dictionary<ushort, uint>();
         private readonly HashSet<uint> _pressedButtons = new HashSet<uint>();
         private readonly object _gate = new object();
         private int _cursorX;
@@ -222,7 +223,7 @@ namespace WinputLan.Runtime
             var input = new NativeMethods.INPUT { Type = NativeMethods.InputKeyboard };
             if (value.Kind == InputKind.KeyDown || value.Kind == InputKind.KeyUp)
             {
-                input.Data.Keyboard = new NativeMethods.KEYBDINPUT { Vk = value.VirtualKey, Scan = value.ScanCode, Flags = value.Kind == InputKind.KeyUp ? NativeMethods.KeyEventKeyUp : 0, Time = 0, ExtraInfo = new IntPtr(InputTag) };
+                input.Data.Keyboard = new NativeMethods.KEYBDINPUT { Vk = value.VirtualKey, Scan = value.ScanCode, Flags = KeyInjection.SendInputFlags(value.Kind, value.Flags), Time = 0, ExtraInfo = new IntPtr(InputTag) };
             }
             else
             {
@@ -284,7 +285,7 @@ namespace WinputLan.Runtime
             if (sent != 1) return false;
             lock (_gate)
             {
-                if (value.Kind == InputKind.KeyDown) _pressedKeys.Add(value.VirtualKey);
+                if (value.Kind == InputKind.KeyDown) _pressedKeys[value.VirtualKey] = value.Flags;
                 else if (value.Kind == InputKind.KeyUp) _pressedKeys.Remove(value.VirtualKey);
                 else if (value.Kind == InputKind.MouseButtonDown) _pressedButtons.Add(ButtonKey(value.Flags, value.MouseData));
                 else if (value.Kind == InputKind.MouseButtonUp) _pressedButtons.Remove(ButtonKey(value.Flags - 1, value.MouseData));
@@ -295,10 +296,10 @@ namespace WinputLan.Runtime
         // Releases only what this sink actually pressed; stray button-ups would end drags or click at random.
         public void ReleaseAll()
         {
-            ushort[] keys;
+            KeyValuePair<ushort, uint>[] keys;
             uint[] buttons;
-            lock (_gate) { keys = new List<ushort>(_pressedKeys).ToArray(); buttons = new List<uint>(_pressedButtons).ToArray(); _pressedKeys.Clear(); _pressedButtons.Clear(); _hasCursor = false; }
-            foreach (var key in keys) Publish(InputEvent.Key(InputKind.KeyUp, key, 0, 0, DateTime.UtcNow.Ticks));
+            lock (_gate) { keys = new List<KeyValuePair<ushort, uint>>(_pressedKeys).ToArray(); buttons = new List<uint>(_pressedButtons).ToArray(); _pressedKeys.Clear(); _pressedButtons.Clear(); _hasCursor = false; }
+            foreach (var key in keys) Publish(InputEvent.Key(InputKind.KeyUp, key.Key, 0, key.Value, DateTime.UtcNow.Ticks));
             foreach (var button in buttons)
             {
                 var up = InputEvent.MouseButton(InputKind.MouseButtonUp, (button & 0xFFFF) + 1, DateTime.UtcNow.Ticks);
@@ -330,7 +331,6 @@ namespace WinputLan.Runtime
         internal const int WmSysKeyUp = 0x0105;
         internal const uint InputMouse = 0;
         internal const uint InputKeyboard = 1;
-        internal const uint KeyEventKeyUp = 0x0002;
         internal const uint MouseEventMove = 0x0001;
         internal const uint MouseEventLeftDown = 0x0002;
         internal const uint MouseEventLeftUp = 0x0004;
