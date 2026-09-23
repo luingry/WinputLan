@@ -111,3 +111,10 @@
 - Causa raiz: fila sem sinalização de disponibilidade, flush redundante após `WriteAsync`, e auditoria visual sem filtro/rate limit para eventos de alta frequência.
 - Solução: a fila passou a aguardar sinal, o flush redundante foi removido, e telemetria/log de mouse usa filtro e atualização agregada de no máximo quatro vezes por segundo; ACK timestampado mede a rota útil.
 - Prevenção: preservar o benchmark loopback com a mesma sessão TLS/30 eventos/ACK comparando polling legado de 2 ms contra drain signal-driven e assert de p95 local <=50 ms, além dos testes de coalescência/clear, janela de latência e throttle de auditoria.
+
+## Chave privada OTA ausente após sessão do Codex
+
+- **Sintoma:** `%LOCALAPPDATA%\WinputLan\release\ota-private.pem` não existia no perfil real; `gh secret set` recebeu conteúdo vazio.
+- **Causa:** a chave foi gerada dentro do sandbox do Codex, cujo `%LOCALAPPDATA%` não persiste para o usuário.
+- **Solução:** novo par RSA-3072 gerado fora do sandbox, chave pública fixada em `Updates.cs` e `KeyId` rotacionado para `winputlan-ota-rsa-2026-09b` antes da primeira release pública.
+- **Prevenção:** gerar chaves de release apenas no perfil real e confirmar `Test-Path` antes de cadastrar o secret; faça backup do PEM fora do repositório.

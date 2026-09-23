@@ -22,7 +22,7 @@ $manifest = [ordered]@{
     Sha256 = $setupHash
     NotesUrl = "https://github.com/luingry/WinputLan/releases/tag/v$version"
     Algorithm = 'RSA-PKCS1-SHA256'
-    KeyId = 'winputlan-ota-rsa-2026-09'
+    KeyId = 'winputlan-ota-rsa-2026-09b'
 }
 $payload = @($manifest.Version, $manifest.AssetName, $manifest.AssetUrl, $manifest.Sha256, $manifest.NotesUrl) -join "`n"
 $rsa = [System.Security.Cryptography.RSA]::Create()
