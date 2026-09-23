@@ -26,7 +26,7 @@ test-only legacy 2ms polling drain versus the production signal-driven drain;
 the local loopback p95 assertion is <=50ms. It does not call a
 physical keyboard or mouse and is not evidence for two-PC Wi-Fi latency.
 It also round-trips the persisted background preference and asserts the
-minimize/close/explicit-Exit lifecycle decisions, including exactly-once cleanup.
+close/explicit-Exit lifecycle decisions, including exactly-once cleanup.
 
 ## Commands
 

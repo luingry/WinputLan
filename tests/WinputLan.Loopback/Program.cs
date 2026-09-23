@@ -160,9 +160,9 @@ namespace WinputLan.Loopback
             var store = new AppConfigStore(directory); var config = WinputConfig.CreateDefault(); config.ContinueInBackground = true; store.Save(config);
             if (!store.LoadOrCreate().ContinueInBackground) throw new InvalidOperationException("Background preference did not persist.");
             var lifecycle = new BackgroundLifecycle(true);
-            if (!lifecycle.ShouldHideOnClose || !lifecycle.ShouldHideOnMinimize || !lifecycle.TryBeginCleanup() || lifecycle.TryBeginCleanup()) throw new InvalidOperationException("Background lifecycle initial transition is invalid.");
+            if (!lifecycle.ShouldHideOnClose || !lifecycle.TryBeginCleanup() || lifecycle.TryBeginCleanup()) throw new InvalidOperationException("Background lifecycle initial transition is invalid.");
             lifecycle = new BackgroundLifecycle(true); lifecycle.RequestExplicitExit();
-            if (lifecycle.ShouldHideOnClose || lifecycle.ShouldHideOnMinimize || !lifecycle.TryBeginCleanup()) throw new InvalidOperationException("Explicit tray exit did not bypass hide and allow one cleanup.");
+            if (lifecycle.ShouldHideOnClose || !lifecycle.TryBeginCleanup()) throw new InvalidOperationException("Explicit tray exit did not bypass hide and allow one cleanup.");
         }
 
         private static async Task ValidCodeDeniedAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert, CancellationToken token)

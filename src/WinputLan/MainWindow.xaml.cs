@@ -141,7 +141,7 @@ namespace WinputLan
                 _accessCodeTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
                 _accessCodeTimer.Tick += (s, e) => _listenerPairingCoordinator?.RefreshExpiredAccessCode();
                 _accessCodeTimer.Start();
-                CreateTrayIcon();
+                CreateTrayIcon(); _trayIcon.Visible = true;
                 StartAutomaticUpdateChecks();
                 StartBlockedInputWatcher();
                 // Keeps the startup entry pointing at this executable and mode after updates or elevation changes.
@@ -314,15 +314,8 @@ namespace WinputLan
             _lastBlockedHintUtc = DateTime.UtcNow;
             AddLog("remote", "local", "Input", "blocked-by-windows");
             CreateTrayIcon();
-            var wasVisible = _trayIcon.Visible;
             _trayIcon.Visible = true;
             _trayIcon.ShowBalloonTip(6000, "Winput LAN: entrada bloqueada", message, Forms.ToolTipIcon.Warning);
-            if (!wasVisible)
-            {
-                var hide = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
-                hide.Tick += (s, e) => { hide.Stop(); if (IsVisible && _trayIcon != null) _trayIcon.Visible = false; };
-                hide.Start();
-            }
         }
         private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(true); }
 
@@ -778,12 +771,12 @@ namespace WinputLan
             _trayIcon.DoubleClick += (s, e) => Dispatcher.BeginInvoke(new Action(RestoreFromTray));
         }
 
-        private void Window_StateChanged(object sender, EventArgs e) { if (_backgroundLifecycle.ShouldHideOnMinimize && WindowState == WindowState.Minimized) HideToTray(); }
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Escape && PairingOverlay.Visibility == Visibility.Visible) { ClosePairingButton_Click(sender, e); e.Handled = true; } }
         private void BackgroundModeCheckBox_Changed(object sender, RoutedEventArgs e) { _config.ContinueInBackground = BackgroundModeCheckBox.IsChecked == true; _backgroundLifecycle.ContinueInBackground = _config.ContinueInBackground; try { _configStore.Save(_config); } catch { } }
         private void AutoAcceptKnownCheckBox_Changed(object sender, RoutedEventArgs e) { _config.AutoAcceptKnownConnections = AutoAcceptKnownCheckBox.IsChecked == true; try { _configStore.Save(_config); } catch { } }
         private void HideToTray() { CreateTrayIcon(); Hide(); _trayIcon.Visible = true; _trayIcon.ShowBalloonTip(1000, "Winput LAN", "Continua em execução na área de notificação.", Forms.ToolTipIcon.Info); }
-        private void RestoreFromTray() { Show(); WindowState = WindowState.Normal; Activate(); if (_trayIcon != null) _trayIcon.Visible = false; }
+        // The tray icon stays visible for the whole run; restoring keeps a maximized window maximized.
+        private void RestoreFromTray() { Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate(); }
         private void ExitFromTray() { _backgroundLifecycle.RequestExplicitExit(); if (_trayIcon != null) _trayIcon.Visible = false; Close(); }
 
         private void AddLog(string origin, string destination, string type, string status)

@@ -5,6 +5,13 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.9] - 2026-09-23
+
+### Changed
+
+- The notification-area icon stays visible for as long as the app runs, including while the window is open or maximized.
+- Minimize only minimizes the window to the taskbar; hiding to the notification area now happens only on close ("Continuar em segundo plano ao fechar").
+
 ## [0.3.8] - 2026-09-23
 
 ### Fixed
