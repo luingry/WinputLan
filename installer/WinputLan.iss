@@ -21,7 +21,13 @@ SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 WizardStyle=modern
+; Brand art for the wizard pages; Inno picks the size closest to the display scaling.
+WizardImageFile=..\assets\brand\installer\wizard-164x314.bmp,..\assets\brand\installer\wizard-328x628.bmp
+WizardSmallImageFile=..\assets\brand\installer\wizard-small-55x58.bmp,..\assets\brand\installer\wizard-small-110x116.bmp
 SignedUninstaller=no
+
+[Languages]
+Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 
 [Files]
 Source: "..\src\WinputLan\bin\Release\net48\WinputLan.exe"; DestDir: "{app}"; Flags: ignoreversion
