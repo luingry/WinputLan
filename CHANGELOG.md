@@ -5,6 +5,18 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.3] - 2026-09-23
+
+### Added
+
+- "Permitir controlar apps de administrador": runs Winput LAN elevated so Task Manager and other elevated windows accept remote input.
+- Notification on the controlled PC when Windows blocks remote input (elevated window in focus or UAC prompt).
+
+### Fixed
+
+- Window freezing during control: the input log is recorded passively and only rendered when "Ver logs de input" is open.
+- Input log list has a maximum height with its own scrolling.
+
 ## [0.2.2] - 2026-09-23
 
 ### Changed

@@ -34,6 +34,7 @@ namespace WinputLan.Tests
             Run("signed release manifest invariants", TestManifest);
             Run("reconnect backoff bounds", TestBackoff);
             Run("automatic update schedule", TestUpdateSchedule);
+            Run("elevated relaunch policy", TestElevationPolicy);
             Console.WriteLine("PASS={0} FAIL={1}", _passed, _failed);
             if (_failed != 0) Environment.ExitCode = 1;
         }
@@ -197,6 +198,14 @@ namespace WinputLan.Tests
             Assert(routing.Release(ctrl) == InputRoute.Local && routing.Release(left) == InputRoute.Local, "remote presses are forgotten after ReleaseAll");
             Assert(routing.Continuous() == InputRoute.Local && routing.Press(two) == InputRoute.Local, "local machine owns input again");
             Assert(InputRoutingState.ButtonId(0x0201) != InputRoutingState.KeyId(0x01), "button ids never collide with virtual keys");
+        }
+
+        private static void TestElevationPolicy()
+        {
+            Assert(!ElevationPolicy.ShouldRelaunchElevated(false, false, new string[0]), "opt-in only");
+            Assert(ElevationPolicy.ShouldRelaunchElevated(true, false, new string[0]), "enabled and not elevated relaunches");
+            Assert(!ElevationPolicy.ShouldRelaunchElevated(true, true, new string[0]), "already elevated stays");
+            Assert(!ElevationPolicy.ShouldRelaunchElevated(true, false, new[] { ElevationPolicy.RelaunchedArgument }), "a relaunched copy never loops");
         }
 
         private static void TestUpdateSchedule()

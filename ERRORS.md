@@ -130,3 +130,18 @@
   5. `ReleaseAll` soltava botões que nunca foram pressionados.
 - **Solução:** hooks numa thread dedicada com loop de mensagens; cursor local fixado no centro e envio de deltas relativos (`MouseDelta`); `InputRoutingState` garante que cada soltura vá para a mesma máquina da pressão; `SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2)` no hook e em volta do `SendInput`; botões pressionados rastreados.
 - **Prevenção:** nunca faça trabalho de UI dentro de hooks LL; testes de injeção devem ser DPI-aware (o `SendInput` absoluto usa o contexto de DPI da thread que chama); smoke `20 deltas land exactly` valida o pixel.
+
+
+## Janela travando durante o controle (registro de entrada)
+
+- **Sintoma:** a janela do app congelava com frequência durante uma sessão.
+- **Causa:** cada evento chamava `RefreshLog`, que limpava e recriava até 500 linhas do DataGrid na thread da UI. Como o DataGrid ficava dentro do ScrollViewer da página sem altura máxima, a virtualização não funcionava e todas as linhas eram renderizadas.
+- **Solução:** o registro virou só um append thread-safe em memória. A lista só existe quando "Ver logs de input" está aberto, e então é atualizada no máximo 1x/s em prioridade Background. O DataGrid tem `MaxHeight=320` com virtualização.
+- **Prevenção:** nunca atualizar a UI por evento de input; listas dentro de ScrollViewer precisam de altura limitada para virtualizar.
+
+## Controle para quando o Gerenciador de Tarefas está em foco
+
+- **Sintoma:** o PC controlado deixava de receber a entrada enquanto uma janela de administrador (Gerenciador de Tarefas) estava em foco; clicar fora dela fazia voltar.
+- **Causa:** UIPI do Windows descarta em silêncio o `SendInput` de um processo não elevado destinado a janelas elevadas. O prompt do UAC (desktop seguro) rejeita qualquer entrada injetada.
+- **Solução:** opção "Permitir controlar apps de administrador", que relança o app com `runas` (com o argumento `--elevated-relaunch` para evitar loop), e aviso na bandeja do PC controlado quando o foco é uma janela elevada ou o `SendInput` falha.
+- **Limite:** o prompt do UAC só pode ser controlado remotamente por um serviço SYSTEM no desktop seguro (como o TeamViewer faz); isso não foi implementado.

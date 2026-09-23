@@ -17,6 +17,12 @@ namespace WinputLan
             var appDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan");
             ConfigStore = new AppConfigStore(appDirectory);
             Config = ConfigStore.LoadOrCreate();
+            // Exit before binding the listener port so the elevated copy can take over.
+            if (ElevationPolicy.ShouldRelaunchElevated(Config.RunElevated, ProcessElevation.IsCurrentElevated(), e.Args) && ProcessElevation.TryRelaunchElevated())
+            {
+                Shutdown();
+                return;
+            }
             MainWindow = new MainWindow(Config, ConfigStore);
             MainWindow.Show();
         }

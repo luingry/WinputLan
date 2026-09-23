@@ -23,6 +23,7 @@ namespace WinputLan.Core
         // Missing in older config files, which then default to Daily (0).
         [DataMember(Order = 13)] public UpdateCheckFrequency UpdateCheckFrequency { get; set; }
         [DataMember(Order = 14)] public long LastUpdateCheckUtcTicks { get; set; }
+        [DataMember(Order = 15)] public bool RunElevated { get; set; }
 
         public static WinputConfig CreateDefault()
         {

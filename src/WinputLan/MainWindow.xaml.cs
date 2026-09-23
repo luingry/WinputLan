@@ -28,7 +28,6 @@ namespace WinputLan
         private readonly WinputConfig _config;
         private readonly AppConfigStore _configStore;
         private readonly InMemoryTransactionLog _transactionLog = new InMemoryTransactionLog();
-        private readonly ObservableCollection<TransactionLogEntry> _logLines = new ObservableCollection<TransactionLogEntry>();
         private readonly InputEventQueue _inputQueue = new InputEventQueue();
         private readonly SendInputSink _inputSink = new SendInputSink();
         private readonly PeerTransport _transport = new PeerTransport();
@@ -49,6 +48,12 @@ namespace WinputLan
         private bool _remoteActive;
         private bool _updateBusy;
         private DispatcherTimer _updateTimer;
+        private DispatcherTimer _logTimer;
+        private DispatcherTimer _uipiTimer;
+        private volatile bool _logDirty = true;
+        private bool _isElevated;
+        private bool _suppressElevationToggle;
+        private DateTime _lastBlockedHintUtc = DateTime.MinValue;
         private Forms.NotifyIcon _trayIcon;
         private readonly BackgroundLifecycle _backgroundLifecycle;
         private readonly InputLatencyWindow _latencyWindow = new InputLatencyWindow();
@@ -64,20 +69,20 @@ namespace WinputLan
             SizeChanged += (sender, args) => ConfigureMachineRows();
             _backgroundLifecycle = new BackgroundLifecycle(_config.ContinueInBackground);
             _configStore = configStore;
-            LogList.ItemsSource = _logLines;
             LocalNameText.Text = _config.DisplayName;
             LocalAddressText.Text = Environment.MachineName + "  |  TCP " + _config.ListenPort;
             LocalIpText.Text = "IP: " + LocalIPv4Address();
             BackgroundModeCheckBox.IsChecked = _config.ContinueInBackground;
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
+            _isElevated = ProcessElevation.IsCurrentElevated();
+            _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
             VersionText.Text = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
             RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);
             RefreshKnownPeer();
             ConfigureMachineRows();
-            _transactionLog.Add("local", "local", "Session", "ready");
-            RefreshLog();
+            _transactionLog.Add("local", "local", "Session", _isElevated ? "ready-elevated" : "ready");
             _transport.StateChanged += Transport_StateChanged;
         }
 
@@ -124,6 +129,7 @@ namespace WinputLan
                 _accessCodeTimer.Start();
                 CreateTrayIcon();
                 StartAutomaticUpdateChecks();
+                StartBlockedInputWatcher();
                 AddLog("local", "local", "Hooks", "armed-controller-only");
             }
             catch (Exception ex)
@@ -152,6 +158,8 @@ namespace WinputLan
             _outboundRequestCts?.Cancel();
             _accessCodeTimer?.Stop();
             _updateTimer?.Stop();
+            _logTimer?.Stop();
+            _uipiTimer?.Stop();
             _listenerTransport?.Dispose();
             _transport.Dispose();
             _hotkeys?.Dispose();
@@ -214,7 +222,73 @@ namespace WinputLan
         }
         private void MachinesButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToTop(); SetInputTarget(false); }
         private void ShortcutsButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToVerticalOffset(360); ShowShortcutsEditor(); }
-        private void LogNavButton_Click(object sender, RoutedEventArgs e) { LogSection.BringIntoView(); }
+        private void LogNavButton_Click(object sender, RoutedEventArgs e) { SetLogPanelVisible(true); LogSection.BringIntoView(); }
+
+        private void LogToggleButton_Click(object sender, RoutedEventArgs e) { SetLogPanelVisible(LogPanel.Visibility != Visibility.Visible); }
+
+        // The list is only materialised while open, and then refreshed at most once per second,
+        // so input bursts never rebuild UI rows on the dispatcher.
+        private void SetLogPanelVisible(bool visible)
+        {
+            LogPanel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            ClearLogButton.Visibility = LogPanel.Visibility;
+            LogToggleButton.Content = visible ? "Ocultar logs de input" : "Ver logs de input";
+            if (!visible) { _logTimer?.Stop(); LogList.ItemsSource = null; return; }
+            if (_logTimer == null)
+            {
+                _logTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+                _logTimer.Tick += (s, e) => { if (_logDirty) RefreshLog(); };
+            }
+            _logDirty = true; RefreshLog(); _logTimer.Start();
+        }
+
+        private void RunElevatedCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressElevationToggle) return;
+            var enable = RunElevatedCheckBox.IsChecked == true;
+            _config.RunElevated = enable;
+            try { _configStore.Save(_config); } catch { }
+            if (!enable)
+            {
+                if (_isElevated) MessageBox.Show("O Winput LAN volta a abrir sem privilégios de administrador na próxima vez que for iniciado.", "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            if (_isElevated) return;
+            if (ProcessElevation.TryRelaunchElevated()) { ExitFromTray(); return; }
+            // UAC declined: keep the setting off so the next start does not prompt unexpectedly.
+            _config.RunElevated = false; try { _configStore.Save(_config); } catch { }
+            _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = false; _suppressElevationToggle = false;
+        }
+
+        // UIPI silently discards input injected into elevated windows; tell the person at this PC why control paused.
+        private void StartBlockedInputWatcher()
+        {
+            if (_isElevated) return;
+            _uipiTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromSeconds(1) };
+            _uipiTimer.Tick += (s, e) =>
+            {
+                if (_listenerTransport == null || _listenerTransport.State != PeerConnectionState.Connected) return;
+                if (ProcessElevation.IsForegroundElevated()) ShowBlockedInputHint("Uma janela de administrador (ex.: Gerenciador de Tarefas) está em foco e o Windows bloqueia o controle remoto nela. Clique fora dela ou ative “Permitir controlar apps de administrador” no Winput LAN deste PC.");
+            };
+            _uipiTimer.Start();
+        }
+
+        private void ShowBlockedInputHint(string message)
+        {
+            if (DateTime.UtcNow - _lastBlockedHintUtc < TimeSpan.FromSeconds(30)) return;
+            _lastBlockedHintUtc = DateTime.UtcNow;
+            AddLog("remote", "local", "Input", "blocked-by-windows");
+            CreateTrayIcon();
+            var wasVisible = _trayIcon.Visible;
+            _trayIcon.Visible = true;
+            _trayIcon.ShowBalloonTip(6000, "Winput LAN: entrada bloqueada", message, Forms.ToolTipIcon.Warning);
+            if (!wasVisible)
+            {
+                var hide = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+                hide.Tick += (s, e) => { hide.Stop(); if (IsVisible && _trayIcon != null) _trayIcon.Visible = false; };
+                hide.Start();
+            }
+        }
         private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(true); }
 
         private void UpdateFrequencyButton_Click(object sender, RoutedEventArgs e)
@@ -240,7 +314,7 @@ namespace WinputLan
             };
             _updateTimer.Start();
         }
-        private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); RefreshLog(); }
+        private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); _logDirty = true; RefreshLog(); }
         private void AcceptPairButton_Click(object sender, RoutedEventArgs e) { try { _listenerPairingCoordinator.AcceptPending(); PairingOverlay.Visibility = Visibility.Collapsed; } catch (Exception ex) { MessageBox.Show(ex.Message, "Acesso", MessageBoxButton.OK, MessageBoxImage.Warning); } }
         private void DenyPairButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.DenyPending(); PairingOverlay.Visibility = Visibility.Collapsed; }
         private void RenewAccessCodeButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.RenewAccessCode(); }
@@ -500,15 +574,18 @@ namespace WinputLan
 
         private void AddLog(string origin, string destination, string type, string status)
         {
+            // Recording is passive and thread-safe; the UI list reads it only while expanded.
             _transactionLog.Add(origin, destination, type, status);
-            RefreshLog();
+            _logDirty = true;
         }
 
         private void AuditInput(InputKind kind, string status)
         {
             if (!_inputAuditPolicy.ShouldEmit(kind, status, DateTime.UtcNow)) return;
-            var received = status.StartsWith("received", StringComparison.Ordinal);
-            Dispatcher.BeginInvoke(new Action(() => AddLog(received ? "remote" : "local", received ? "local" : "remote", "Input." + kind, status)));
+            var received = status.StartsWith("received", StringComparison.Ordinal) || status == "dropped-sink";
+            AddLog(received ? "remote" : "local", received ? "local" : "remote", "Input." + kind, status);
+            // SendInput fails outright while the UAC secure desktop is shown.
+            if (status == "dropped-sink") Dispatcher.BeginInvoke(new Action(() => ShowBlockedInputHint("O Windows está mostrando um aviso de segurança (UAC) neste PC. Esse aviso só aceita mouse e teclado físicos; confirme-o localmente para o controle voltar.")));
         }
 
         private static System.Drawing.Icon LoadTrayIcon()
@@ -519,9 +596,11 @@ namespace WinputLan
 
         private void RefreshLog()
         {
-            _logLines.Clear();
-            foreach (var entry in _transactionLog.Snapshot().Reverse()) _logLines.Add(entry);
-            LogStatusText.Text = _logLines.Count + " eventos nesta sessão";
+            if (LogPanel.Visibility != Visibility.Visible) return;
+            _logDirty = false;
+            var entries = _transactionLog.Snapshot().Reverse().ToList();
+            LogList.ItemsSource = entries;
+            LogStatusText.Text = entries.Count + " eventos nesta sessão";
         }
 
         private void ShowShortcutsEditor()
