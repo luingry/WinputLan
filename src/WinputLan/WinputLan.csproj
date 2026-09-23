@@ -21,7 +21,8 @@
     <Reference Include="System.Drawing" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="..\..\assets\brand\winput-lan.ico" Link="assets\brand\winput-lan.ico" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Embedded so the window and tray icons never depend on the installed folder layout. -->
+    <Resource Include="..\..\assets\brand\winput-lan.ico" Link="assets\brand\winput-lan.ico" />
     <Resource Include="..\..\assets\brand\icon-normalized.png" Link="assets\brand\icon-normalized.png" />
   </ItemGroup>
 </Project>

@@ -145,3 +145,11 @@
 - **Causa:** UIPI do Windows descarta em silêncio o `SendInput` de um processo não elevado destinado a janelas elevadas. O prompt do UAC (desktop seguro) rejeita qualquer entrada injetada.
 - **Solução:** opção "Permitir controlar apps de administrador", que relança o app com `runas` (com o argumento `--elevated-relaunch` para evitar loop), e aviso na bandeja do PC controlado quando o foco é uma janela elevada ou o `SendInput` falha.
 - **Limite:** o prompt do UAC só pode ser controlado remotamente por um serviço SYSTEM no desktop seguro (como o TeamViewer faz); isso não foi implementado.
+
+
+## Ícone ausente na bandeja e na janela (cópia instalada)
+
+- **Sintoma:** na área de notificação (ícones ocultos) o Winput LAN aparecia sem ícone quando instalado; rodando da pasta de build funcionava.
+- **Causa:** o código carregava `assets\brand\winput-lan.ico` ao lado do exe, mas o instalador copia o `.ico` para a raiz de `{app}`. O `catch` escondia o erro.
+- **Solução:** o `.ico` virou `Resource` WPF embutido no exe e é lido via pack URI (`/WinputLan;component/assets/brand/winput-lan.ico`), no tamanho `SystemInformation.SmallIconSize`.
+- **Prevenção:** recursos visuais que o app precisa em runtime devem ser embutidos, não depender do layout de arquivos do instalador.

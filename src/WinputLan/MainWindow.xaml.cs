@@ -64,7 +64,7 @@ namespace WinputLan
         public MainWindow(WinputConfig config, AppConfigStore configStore)
         {
             InitializeComponent();
-            try { Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "brand", "winput-lan.ico"))); } catch { }
+            try { Icon = System.Windows.Media.Imaging.BitmapFrame.Create(BrandIconUri); } catch { }
             _config = config ?? WinputConfig.CreateDefault();
             SizeChanged += (sender, args) => ConfigureMachineRows();
             _backgroundLifecycle = new BackgroundLifecycle(_config.ContinueInBackground);
@@ -589,9 +589,12 @@ namespace WinputLan
             if (status == "dropped-sink") Dispatcher.BeginInvoke(new Action(() => ShowBlockedInputHint("O Windows está mostrando um aviso de segurança (UAC) neste PC. Esse aviso só aceita mouse e teclado físicos; confirme-o localmente para o controle voltar.")));
         }
 
+        private static readonly Uri BrandIconUri = new Uri("pack://application:,,,/WinputLan;component/assets/brand/winput-lan.ico", UriKind.Absolute);
+
         private static System.Drawing.Icon LoadTrayIcon()
         {
-            try { return new System.Drawing.Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "brand", "winput-lan.ico")); }
+            // Pick the size Windows uses for the notification area at the current DPI instead of scaling a 32 px frame.
+            try { using (var stream = Application.GetResourceStream(BrandIconUri).Stream) return new System.Drawing.Icon(stream, Forms.SystemInformation.SmallIconSize); }
             catch { return System.Drawing.SystemIcons.Application; }
         }
 
