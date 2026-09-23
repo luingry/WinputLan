@@ -72,12 +72,14 @@ namespace WinputLan
             try { Icon = System.Windows.Media.Imaging.BitmapFrame.Create(BrandIconUri); } catch { }
             _config = config ?? WinputConfig.CreateDefault();
             SizeChanged += (sender, args) => ConfigureMachineRows();
+            ContentRendered += (sender, args) => FitHeightToContent();
             _backgroundLifecycle = new BackgroundLifecycle(_config.ContinueInBackground);
             _configStore = configStore;
             LocalNameText.Text = _config.DisplayName;
             LocalAddressText.Text = Environment.MachineName + "  |  TCP " + _config.ListenPort;
             LocalIpText.Text = "IP: " + LocalIPv4Address();
             BackgroundModeCheckBox.IsChecked = _config.ContinueInBackground;
+            AutoAcceptKnownCheckBox.IsChecked = _config.AutoAcceptKnownConnections;
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             _isElevated = ProcessElevation.IsCurrentElevated();
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
@@ -508,6 +510,19 @@ namespace WinputLan
             });
         }
 
+        // Grows the window once so the dashboard fits without its scrollbar, within the work area.
+        private void FitHeightToContent()
+        {
+            if (WindowState != WindowState.Normal) return;
+            DashboardScroll.UpdateLayout();
+            var overflow = DashboardScroll.ExtentHeight - DashboardScroll.ViewportHeight;
+            if (overflow <= 0) return;
+            var area = SystemParameters.WorkArea;
+            var height = Math.Min(area.Height, Height + Math.Ceiling(overflow));
+            Top = Math.Max(area.Top, Math.Min(Top - (height - Height) / 2, area.Bottom - height));
+            Height = height;
+        }
+
         private void ConfigureMachineRows()
         {
             var compact = ActualWidth > 0 && ActualWidth <= 1100;
@@ -679,6 +694,11 @@ namespace WinputLan
         {
             // A machine accepting control must never retain an outbound capture from an older session.
             StopControllerCapture();
+            if (request.Recognized && _config.AutoAcceptKnownConnections)
+            {
+                try { _listenerPairingCoordinator.AcceptPending(); AddLog("remote", "local", "Access", "auto-accepted"); return; }
+                catch (Exception) { AddLog("remote", "local", "Access", "auto-accept-failed"); }
+            }
             PairingOverlay.Visibility = Visibility.Visible;
             ControllerPairPanel.Visibility = Visibility.Collapsed; TargetApprovalPanel.Visibility = Visibility.Visible;
             PairingTitleText.Text = "Permitir controle?";
@@ -739,6 +759,7 @@ namespace WinputLan
         private void Window_StateChanged(object sender, EventArgs e) { if (_backgroundLifecycle.ShouldHideOnMinimize && WindowState == WindowState.Minimized) HideToTray(); }
         private void Window_PreviewKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Escape && PairingOverlay.Visibility == Visibility.Visible) { ClosePairingButton_Click(sender, e); e.Handled = true; } }
         private void BackgroundModeCheckBox_Changed(object sender, RoutedEventArgs e) { _config.ContinueInBackground = BackgroundModeCheckBox.IsChecked == true; _backgroundLifecycle.ContinueInBackground = _config.ContinueInBackground; try { _configStore.Save(_config); } catch { } }
+        private void AutoAcceptKnownCheckBox_Changed(object sender, RoutedEventArgs e) { _config.AutoAcceptKnownConnections = AutoAcceptKnownCheckBox.IsChecked == true; try { _configStore.Save(_config); } catch { } }
         private void HideToTray() { CreateTrayIcon(); Hide(); _trayIcon.Visible = true; _trayIcon.ShowBalloonTip(1000, "Winput LAN", "Continua em execução na área de notificação.", Forms.ToolTipIcon.Info); }
         private void RestoreFromTray() { Show(); WindowState = WindowState.Normal; Activate(); if (_trayIcon != null) _trayIcon.Visible = false; }
         private void ExitFromTray() { _backgroundLifecycle.RequestExplicitExit(); if (_trayIcon != null) _trayIcon.Visible = false; Close(); }

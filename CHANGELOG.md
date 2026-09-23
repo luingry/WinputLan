@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.6] - 2026-09-23
+
+### Added
+
+- Preference "Permitir automaticamente conexões conhecidas" (off by default): a recognized controller, with a valid trust key and unchanged certificate, starts its session without the approval prompt. Unknown machines still need the code and approval.
+
+### Changed
+
+- Default window height is 862 px so the dashboard fits without a scrollbar; on first display the window grows further if the content still overflows, up to the work area.
+
 ## [0.3.5] - 2026-09-23
 
 ### Changed

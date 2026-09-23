@@ -29,6 +29,8 @@ namespace WinputLan.Core
         // Controllers this PC recognises; cleared when the user intentionally renews the access code.
         [DataMember(Order = 17)] public List<TrustedPeer> TrustedControllers { get; set; }
         [DataMember(Order = 18)] public bool StartWithWindows { get; set; }
+        // Recognized controllers (valid trust proof and unchanged certificate) start without the approval prompt.
+        [DataMember(Order = 19)] public bool AutoAcceptKnownConnections { get; set; }
 
         public static WinputConfig CreateDefault()
         {
