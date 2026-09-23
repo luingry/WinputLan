@@ -28,9 +28,12 @@ There is no clipboard, text extraction, screen capture, or telemetry.
 
 The installer adds one visible inbound TCP rule: `Winput LAN (Private TCP)`,
 Private profile only, the installed program path, and the configured port. The
-updater accepts only HTTPS GitHub manifest/asset URLs, a newer SemVer, a valid
-SHA-256, and an Authenticode-trusted asset. A missing release certificate keeps
-the update path closed rather than silently installing an unsigned binary.
+updater accepts only pinned HTTPS GitHub URLs, a newer SemVer, an exact setup
+filename, a valid SHA-256, and a PKCS#1 v1.5 SHA-256 RSA signature over the
+canonical manifest fields. The matching private PEM exists only in the GitHub
+release secret; the public key is pinned in the application. Redirects are
+host-pinned and bounded. Authenticode remains optional for SmartScreen/reputation,
+but is not an OTA trust dependency.
 
 ## Known boundaries
 

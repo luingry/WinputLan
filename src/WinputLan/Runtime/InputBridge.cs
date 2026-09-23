@@ -111,7 +111,7 @@ namespace WinputLan.Runtime
                     else if (message == WmLButtonDown || message == WmRButtonDown || message == WmMButtonDown) value = InputEvent.MouseButton(InputKind.MouseButtonDown, (uint)message, DateTime.UtcNow.Ticks);
                     else if (message == WmLButtonUp || message == WmRButtonUp || message == WmMButtonUp) value = InputEvent.MouseButton(InputKind.MouseButtonUp, (uint)message, DateTime.UtcNow.Ticks);
                     else if (message == WmMouseWheel) value = InputEvent.MouseWheel(unchecked((short)(data.MouseData >> 16)), DateTime.UtcNow.Ticks);
-                    if (value != null && _sink.Publish(value)) return (IntPtr)1;
+                    if (value != null && InputCapturePolicy.ShouldSuppressPublished(value.Kind, _sink.Publish(value))) return (IntPtr)1;
                 }
             }
             return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);

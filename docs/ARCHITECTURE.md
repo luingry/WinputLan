@@ -1,11 +1,11 @@
 # Architecture
 
 ```text
-WH_*_LL hooks -> InputRouter -> bounded InputEventQueue -> TLS PeerTransport
-                                              ^                 |
-                                      fail-safe release <- SendInput
+controller WH_*_LL hooks -> InputRouter -> signal-driven InputEventQueue -> TLS PeerTransport
+                                                        ^                     |
+                                                InputAck telemetry     target PairedInputReceiver -> SendInput
 
-WPF UI -> PairingCoordinator -> TLS transcript/SAS -> DPAPI PinStore
+WPF UI -> target access code + PairingCoordinator -> TLS request/target approval -> DPAPI PinStore
 ```
 
 `WinputLan.Core` is netstandard2.0 and contains deterministic protocol,
@@ -16,9 +16,16 @@ certificates, sockets, firewall, updater, and the UI.
 There is no service process and no elevation requirement. A listener uses the
 single configured TCP port. A connection is `TcpClient.NoDelay` plus `SslStream`
 with TLS 1.2 and client certificates on both sides. Frame reading runs off the
-connect caller; a five-second heartbeat is sent while connected. A pinned
-outbound target is retried with bounded exponential backoff (250 ms to 15 s);
-pairing itself remains explicit so an unknown peer is never auto-approved.
+connect caller; a five-second heartbeat is sent while connected. Access sessions
+remain explicit: the controlled PC displays its IP above a renewable 80-bit,
+16-character Base32 code. PairingCoordinator uses a challenge-response HMAC
+over both certificate fingerprints and fresh nonces before exposing a passive
+approval popup, then validates a distinct acceptance proof before authorizing
+the controller. The displayed IP is selected from an Up,
+routed Ethernet/Wi-Fi IPv4 interface; loopback and APIPA are excluded. Each
+session has one input direction only:
+controller sends and target injects. The background option uses one
+notification-area icon with Restore and Exit; Exit alone performs final cleanup.
 
 Input events have fixed-size binary payloads. The queue refuses to reorder
 keyboard/button events. Only a consecutive tail `MouseMove` is replaced; a

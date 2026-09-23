@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using WinputLan.Core;
 
@@ -16,14 +17,21 @@ namespace WinputLan.Tests
             Run("frame round-trip and bounds", TestFrames);
             Run("wheel delta wire preservation", TestWheel);
             Run("pairing transcript, SAS and HKDF", TestPairing);
+            Run("access proof rejects certificate substitution", TestAccessProof);
             Run("pin store abstraction", TestPins);
             Run("queue coalescing and order", TestQueue);
+            Run("queue coalesce clear leaves no phantom permit", TestQueueSignals);
+            Run("LAN IPv4 selection prefers routed Ethernet/Wi-Fi", TestLanAddressSelection);
+            Run("rolling latency window is p50 and throttled", TestLatencyWindow);
+            Run("input audit filters duplicates and throttles high frequency", TestInputAuditPolicy);
+            Run("mouse capture suppression preserves local cursor movement", TestInputCapturePolicy);
+            Run("outbound cancellation cannot update a newer attempt", TestRequestAttemptOwnership);
             Run("hotkey validation", TestHotkeys);
             Run("hotkey hook bypass", TestHotkeyBypass);
             Run("absolute pointer mapping", TestPointerMapping);
             Run("privacy log", TestPrivacyLog);
             Run("configuration corruption validation", TestConfig);
-            Run("release manifest invariants", TestManifest);
+            Run("signed release manifest invariants", TestManifest);
             Run("reconnect backoff bounds", TestBackoff);
             Console.WriteLine("PASS={0} FAIL={1}", _passed, _failed);
             if (_failed != 0) Environment.ExitCode = 1;
@@ -67,6 +75,20 @@ namespace WinputLan.Tests
             Assert(confirm.IsComplete, "bilateral confirmation");
         }
 
+        private static void TestAccessProof()
+        {
+            var code = AccessCode.Generate();
+            Assert(AccessCode.IsValid(code) && AccessCode.Format(code).Split(' ').Length == 4, "access code is a grouped 16-character Base32 value");
+            var controllerNonce = Enumerable.Range(0, 32).Select(i => (byte)i).ToArray();
+            var targetNonce = Enumerable.Range(32, 32).Select(i => (byte)i).ToArray();
+            var directTranscript = AccessProof.CanonicalTranscript("controller", "target", "controller-fingerprint", "target-fingerprint", controllerNonce, targetNonce);
+            var proof = AccessProof.Create(code, directTranscript, "request");
+            Assert(AccessProof.Verify(code, directTranscript, "request", proof), "matching direct transcript validates");
+            var substitutedCertificateTranscript = AccessProof.CanonicalTranscript("controller", "target", "controller-fingerprint", "mitm-target-fingerprint", controllerNonce, targetNonce);
+            Assert(!AccessProof.Verify(code, substitutedCertificateTranscript, "request", proof), "certificate substitution rejects request proof before approval");
+            Assert(!AccessProof.Verify(code, directTranscript, "accept", proof), "request proof cannot be replayed as acceptance proof");
+        }
+
         private static void TestWheel()
         {
             var wheel = InputEvent.MouseWheel(-120, DateTime.UtcNow.Ticks);
@@ -99,6 +121,76 @@ namespace WinputLan.Tests
             Assert(queue.TryDequeue(out value) && value.Kind == InputKind.KeyDown, "key order");
             Assert(queue.TryDequeue(out value) && value.Kind == InputKind.MouseMove && value.X == 2, "latest move");
             Assert(queue.TryDequeue(out value) && value.Kind == InputKind.MouseButtonDown, "button order");
+        }
+
+        private static void TestQueueSignals()
+        {
+            var queue = new InputEventQueue(8);
+            queue.Enqueue(InputEvent.MouseMove(1, 1, 1));
+            queue.Enqueue(InputEvent.MouseMove(2, 2, 2));
+            queue.Clear();
+            using (var cancellation = new System.Threading.CancellationTokenSource())
+            {
+                var wait = queue.DequeueAsync(cancellation.Token);
+                System.Threading.Thread.Sleep(20);
+                Assert(!wait.IsCompleted, "coalesce plus clear must not leave a dequeue permit");
+                cancellation.Cancel();
+                try { wait.GetAwaiter().GetResult(); throw new InvalidOperationException("cancelled queue wait completed"); }
+                catch (OperationCanceledException) { }
+            }
+        }
+
+        private static void TestLanAddressSelection()
+        {
+            var selected = LanAddressSelector.Select(new[]
+            {
+                new LanAddressCandidate { Address = "169.254.1.1", InterfaceUp = true, HasGateway = true, IsEthernetOrWifi = true },
+                new LanAddressCandidate { Address = "10.0.0.7", InterfaceUp = true, HasGateway = false, IsEthernetOrWifi = true },
+                new LanAddressCandidate { Address = "192.168.1.9", InterfaceUp = true, HasGateway = true, IsEthernetOrWifi = true },
+                new LanAddressCandidate { Address = "127.0.0.1", InterfaceUp = true, HasGateway = true, IsEthernetOrWifi = true }
+            });
+            Assert(selected == "192.168.1.9", "routed non-APIPA LAN address selected");
+        }
+
+        private static void TestLatencyWindow()
+        {
+            var window = new InputLatencyWindow(5); window.Record(TimeSpan.FromMilliseconds(1)); window.Record(TimeSpan.FromMilliseconds(9)); window.Record(TimeSpan.FromMilliseconds(4));
+            double p50; var now = DateTime.UtcNow;
+            Assert(window.TryGetP50(now, TimeSpan.FromMilliseconds(250), out p50) && p50 == 4, "rolling p50");
+            Assert(!window.TryGetP50(now.AddMilliseconds(100), TimeSpan.FromMilliseconds(250), out p50), "visual updates throttled");
+        }
+
+        private static void TestInputAuditPolicy()
+        {
+            var policy = new InputAuditPolicy(); var now = DateTime.UtcNow;
+            Assert(!policy.ShouldEmit(InputKind.MouseMove, "queued", now) && !policy.ShouldEmit(InputKind.MouseMove, "coalesced", now), "queue diagnostics are not UI log events");
+            Assert(policy.ShouldEmit(InputKind.KeyDown, "sent", now) && policy.ShouldEmit(InputKind.KeyUp, "received", now), "discrete keys retained");
+            Assert(policy.ShouldEmit(InputKind.MouseMove, "sent", now), "first mouse move emitted");
+            Assert(!policy.ShouldEmit(InputKind.MouseMove, "sent", now.AddMilliseconds(249)), "mouse move rate limited");
+            Assert(policy.ShouldEmit(InputKind.MouseWheel, "received", now.AddMilliseconds(250)), "high frequency update resumes at four hertz");
+        }
+
+        private static void TestInputCapturePolicy()
+        {
+            Assert(!InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseMove, true), "published mouse move remains local");
+            Assert(InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseButtonDown, true), "published mouse down suppresses local click");
+            Assert(InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseButtonUp, true), "published mouse up suppresses local click");
+            Assert(InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseWheel, true), "published wheel suppresses local scroll");
+            Assert(!InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseButtonDown, false), "unpublished input is never suppressed");
+        }
+
+        private static void TestRequestAttemptOwnership()
+        {
+            using (var requestA = new System.Threading.CancellationTokenSource())
+            using (var requestB = new System.Threading.CancellationTokenSource())
+            {
+            object activeRequest = requestA; var displayedState = "A: connecting";
+            requestA.Cancel(); activeRequest = requestB; displayedState = "B: connecting";
+            if (RequestAttemptOwnership.IsCurrent(activeRequest, requestA)) displayedState = "A: cancelled";
+            Assert(displayedState == "B: connecting", "completion of cancelled A cannot overwrite B UI state");
+            Assert(RequestAttemptOwnership.IsCurrent(activeRequest, requestB), "current attempt B retains UI ownership");
+            Assert(requestA.IsCancellationRequested && !requestB.IsCancellationRequested, "cancelled A is distinct from active B");
+            }
         }
 
         private static void TestHotkeys()
@@ -159,18 +251,49 @@ namespace WinputLan.Tests
 
         private static void TestManifest()
         {
-            string reason;
-            var manifest = new ReleaseManifest { Version = "0.1.1", AssetName = "WinputLan-0.1.1-setup.exe", AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/WinputLan-0.1.1-setup.exe", Sha256 = new string('a', 64), AuthenticodeRequired = true };
-            Assert(ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), reason);
-            manifest.AssetName = "WinputLan-0.1.1-setup.exe";
-            Assert(ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "setup manifest accepted");
-            manifest.AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/other-setup.exe";
-            Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "asset URL/name mismatch rejected");
-            manifest.AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/WinputLan-0.1.1-setup.exe";
-            manifest.AssetUrl = "http://example.com/file.exe";
-            Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "non-GitHub URL rejected");
-            manifest.AssetUrl = "https://attackergithub.com/file.exe";
-            Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", out reason), "lookalike GitHub host rejected");
+            using (var rsa = new RSACryptoServiceProvider(2048))
+            {
+                var key = rsa.ToXmlString(false);
+                var manifest = NewManifest();
+                Sign(manifest, rsa);
+                string reason;
+                Assert(ReleaseManifestSignature.Verify(manifest, key), "valid RSA signature verifies");
+                Assert(ReleaseManifestValidator.TryValidate(manifest, "0.1.0", key, out reason), reason);
+                foreach (var field in new[] { "Version", "AssetName", "AssetUrl", "Sha256", "NotesUrl" })
+                {
+                    var tampered = NewManifest(); Sign(tampered, rsa);
+                    if (field == "Version") tampered.Version = "0.1.2";
+                    if (field == "AssetName") tampered.AssetName = "WinputLan-0.1.2-setup.exe";
+                    if (field == "AssetUrl") tampered.AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.2/WinputLan-0.1.2-setup.exe";
+                    if (field == "Sha256") tampered.Sha256 = new string('b', 64);
+                    if (field == "NotesUrl") tampered.NotesUrl = "https://github.com/luingry/WinputLan/releases/tag/v0.1.2";
+                    Assert(!ReleaseManifestSignature.Verify(tampered, key), field + " tampering rejects signature");
+                }
+                manifest = NewManifest(); Sign(manifest, rsa); manifest.Signature = Convert.ToBase64String(new byte[256]);
+                Assert(!ReleaseManifestSignature.Verify(manifest, key), "signature tampering rejects");
+                manifest = NewManifest(); Sign(manifest, rsa); manifest.Algorithm = "RSA-PSS-SHA256";
+                Assert(!ReleaseManifestSignature.Verify(manifest, key), "algorithm tampering rejects");
+                manifest = NewManifest(); Sign(manifest, rsa); manifest.KeyId = "other-key";
+                Assert(!ReleaseManifestSignature.Verify(manifest, key), "key id tampering rejects");
+                manifest = NewManifest(); manifest.AssetUrl = "https://attackergithub.com/file.exe"; Sign(manifest, rsa);
+                Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", key, out reason), "lookalike GitHub host rejected");
+                manifest = NewManifest(); manifest.AssetName = "other.exe"; Sign(manifest, rsa);
+                Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", key, out reason), "invalid asset name rejected");
+                manifest = NewManifest(); manifest.Sha256 = "no"; Sign(manifest, rsa);
+                Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", key, out reason), "invalid hash rejected");
+                manifest = NewManifest(); manifest.Version = "0.1.0"; Sign(manifest, rsa);
+                Assert(!ReleaseManifestValidator.TryValidate(manifest, "0.1.0", key, out reason), "same version rejected");
+            }
+        }
+
+        private static ReleaseManifest NewManifest()
+        {
+            return new ReleaseManifest { Version = "0.1.1", AssetName = "WinputLan-0.1.1-setup.exe", AssetUrl = "https://github.com/luingry/WinputLan/releases/download/v0.1.1/WinputLan-0.1.1-setup.exe", Sha256 = new string('a', 64), NotesUrl = "https://github.com/luingry/WinputLan/releases/tag/v0.1.1", Algorithm = ReleaseManifestSignature.AlgorithmName, KeyId = ReleaseManifestSignature.KeyIdentifier };
+        }
+
+        private static void Sign(ReleaseManifest manifest, RSACryptoServiceProvider rsa)
+        {
+            manifest.Signature = Convert.ToBase64String(rsa.SignData(Encoding.UTF8.GetBytes(ReleaseManifestSignature.CanonicalPayload(manifest)), CryptoConfig.MapNameToOID("SHA256")));
         }
 
         private static void TestBackoff()

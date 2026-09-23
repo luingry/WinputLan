@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using WinputLan.Core;
 
 namespace WinputLan.Runtime
@@ -31,6 +32,11 @@ namespace WinputLan.Runtime
 
         private void Transport_FrameReceived(Frame frame)
         {
+            if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll))
+            {
+                InputAudited?.Invoke(InputKind.KeyDown, "dropped-direction");
+                return;
+            }
             if (frame.Type == FrameType.ReleaseAll)
             {
                 if (_transport.State == PeerConnectionState.Connected) { ReleaseAll(); InputAudited?.Invoke(InputKind.KeyUp, "received-release"); }
@@ -41,9 +47,17 @@ namespace WinputLan.Runtime
             try
             {
                 var input = FrameCodec.DecodeInput(frame.Payload);
-                InputAudited?.Invoke(input.Kind, _sink.Publish(input) ? "received" : "dropped-sink");
+                var accepted = _sink.Publish(input);
+                InputAudited?.Invoke(input.Kind, accepted ? "received" : "dropped-sink");
+                if (accepted) _ = SendAckAsync(input.TimestampUtcTicks);
             }
             catch { InputAudited?.Invoke(InputKind.KeyDown, "dropped-invalid"); }
+        }
+
+        private async System.Threading.Tasks.Task SendAckAsync(long timestampUtcTicks)
+        {
+            try { await _transport.SendAsync(FrameType.InputAck, BitConverter.GetBytes(timestampUtcTicks), CancellationToken.None).ConfigureAwait(false); }
+            catch { }
         }
 
         private void Transport_StateChanged(PeerConnectionState state, string detail)

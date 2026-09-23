@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using System.IO;
 using WinputLan.Core;
 
 namespace WinputLan.Runtime
@@ -20,14 +21,16 @@ namespace WinputLan.Runtime
             _transport = transport ?? throw new ArgumentNullException("transport");
             _releaseSink = releaseSink ?? throw new ArgumentNullException("releaseSink");
             _transport.StateChanged += Transport_StateChanged;
+            _transport.FrameReceived += Transport_FrameReceived;
             _ = DrainLoopAsync(_cts.Token);
         }
 
         public event Action<InputKind, string> InputAudited;
+        public event Action<TimeSpan> InputLatencyMeasured;
 
         public bool Publish(InputEvent value)
         {
-            if (!_remoteActive || _transport.State != PeerConnectionState.Connected) return false;
+            if (!_remoteActive || _transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend) return false;
             var result = _queue.Enqueue(value);
             InputAudited?.Invoke(value.Kind, result == EnqueueResult.RejectedFull ? "dropped-full" : result == EnqueueResult.CoalescedMouseMove ? "coalesced" : "queued");
             return result != EnqueueResult.RejectedFull;
@@ -52,6 +55,7 @@ namespace WinputLan.Runtime
             _remoteActive = false;
             _cts.Cancel();
             _transport.StateChanged -= Transport_StateChanged;
+            _transport.FrameReceived -= Transport_FrameReceived;
             _queue.Clear();
             ReleaseAll();
             _cts.Dispose();
@@ -61,11 +65,18 @@ namespace WinputLan.Runtime
         {
             while (!cancellationToken.IsCancellationRequested)
             {
-                InputEvent value;
-                if (!_queue.TryDequeue(out value)) { await Task.Delay(2, cancellationToken).ConfigureAwait(false); continue; }
+                var value = await _queue.DequeueAsync(cancellationToken).ConfigureAwait(false);
                 try { await _transport.SendAsync(FrameType.Input, FrameCodec.EncodeInput(value), cancellationToken).ConfigureAwait(false); InputAudited?.Invoke(value.Kind, "sent"); }
                 catch { FailSafe(); InputAudited?.Invoke(value.Kind, "dropped-disconnected"); }
             }
+        }
+
+        private void Transport_FrameReceived(Frame frame)
+        {
+            if (frame.Type != FrameType.InputAck || frame.Payload == null || frame.Payload.Length != sizeof(long)) return;
+            var sentTicks = BitConverter.ToInt64(frame.Payload, 0);
+            if (sentTicks <= 0 || sentTicks > DateTime.UtcNow.Ticks) return;
+            InputLatencyMeasured?.Invoke(TimeSpan.FromTicks(DateTime.UtcNow.Ticks - sentTicks));
         }
 
         private void Transport_StateChanged(PeerConnectionState state, string detail)

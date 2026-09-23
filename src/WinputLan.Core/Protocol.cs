@@ -15,7 +15,8 @@ namespace WinputLan.Core
         HeartbeatAck = 6,
         Goodbye = 7,
         Error = 8,
-        ReleaseAll = 9
+        ReleaseAll = 9,
+        InputAck = 10
     }
 
     public enum InputKind : byte

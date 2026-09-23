@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace WinputLan.Core
 {
@@ -15,6 +17,7 @@ namespace WinputLan.Core
         private readonly object _gate = new object();
         private readonly LinkedList<InputEvent> _items = new LinkedList<InputEvent>();
         private readonly int _capacity;
+        private readonly SemaphoreSlim _available = new SemaphoreSlim(0);
 
         public InputEventQueue(int capacity = 256)
         {
@@ -39,11 +42,24 @@ namespace WinputLan.Core
                     }
                     if (_items.Count >= _capacity) return EnqueueResult.RejectedFull;
                     _items.AddLast(value);
+                    _available.Release();
                     return EnqueueResult.Accepted;
                 }
                 if (_items.Count >= _capacity) return EnqueueResult.RejectedFull;
                 _items.AddLast(value);
+                _available.Release();
                 return EnqueueResult.Accepted;
+            }
+        }
+
+        // A signal-driven dequeue replaces the former fixed polling delay in the input hot path.
+        public async Task<InputEvent> DequeueAsync(CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                await _available.WaitAsync(cancellationToken).ConfigureAwait(false);
+                InputEvent value;
+                if (TryDequeue(out value)) return value;
             }
         }
 
@@ -60,7 +76,13 @@ namespace WinputLan.Core
 
         public void Clear()
         {
-            lock (_gate) _items.Clear();
+            lock (_gate)
+            {
+                _items.Clear();
+                // Keep semaphore permits aligned with queued items. Holding _gate prevents
+                // a concurrent producer from having its fresh signal drained here.
+                while (_available.Wait(0)) { }
+            }
         }
     }
 }

@@ -19,6 +19,7 @@ namespace WinputLan.Core
         [DataMember(Order = 9)] public string LocalHotkey { get; set; }
         [DataMember(Order = 10)] public string RemoteHotkey { get; set; }
         [DataMember(Order = 11)] public byte[] PinnedSecret { get; set; }
+        [DataMember(Order = 12)] public bool ContinueInBackground { get; set; }
 
         public static WinputConfig CreateDefault()
         {

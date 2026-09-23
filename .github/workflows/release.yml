@@ -28,16 +28,16 @@ jobs:
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --yes --no-progress
-      - name: Package signed setup
+      - name: Package setup and sign OTA manifest
         shell: pwsh
         env:
-          SIGNING_PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
-          SIGNING_PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+          OTA_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.OTA_SIGNING_PRIVATE_KEY_PEM }}
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:SIGNING_PFX_BASE64) -or [string]::IsNullOrWhiteSpace($env:SIGNING_PFX_PASSWORD)) { throw 'Signing secrets are required; release fails closed.' }
-          $certificate = Join-Path $env:RUNNER_TEMP 'winputlan-signing.pfx'
-          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:SIGNING_PFX_BASE64))
-          ./scripts/finalize.ps1 -Configuration Release -CertificatePath $certificate -CertificatePassword $env:SIGNING_PFX_PASSWORD
+          if ([string]::IsNullOrWhiteSpace($env:OTA_SIGNING_PRIVATE_KEY_PEM)) { throw 'OTA_SIGNING_PRIVATE_KEY_PEM is required; release fails closed.' }
+          $key = Join-Path $env:RUNNER_TEMP 'winputlan-ota-private.pem'
+          [IO.File]::WriteAllText($key, $env:OTA_SIGNING_PRIVATE_KEY_PEM, [Text.UTF8Encoding]::new($false))
+          ./scripts/finalize.ps1 -Configuration Release -OtaPrivateKeyPath $key
+          Remove-Item -LiteralPath $key -Force
       - name: Release notes
         shell: pwsh
         run: ./scripts/release-notes.ps1 | Set-Content artifacts/release-notes.md -Encoding UTF8

@@ -1,11 +1,32 @@
 # Errors and prevention
 
+## 2026-09-21 - OTA bloqueado em instalações públicas sem Authenticode
+
+- Sintoma: o updater recusava qualquer setup quando o executável instalado não tinha um certificado Authenticode comercial confiável.
+- Causa raiz: a política vinculava a confiança da atualização ao thumbprint do binário bootstrap, em vez de autenticar os metadados da release.
+- Solução: manifesto canônico assinado com RSA PKCS#1 v1.5/SHA-256, chave pública fixada no aplicativo, hash do setup e validação estrita de versão, host, nome e URLs.
+- Prevenção: manter o PEM privado apenas no secret `OTA_SIGNING_PRIVATE_KEY_PEM`; testes devem rejeitar adulteração de todos os campos assinados e metadados de algoritmo/chave.
+
+## 2026-09-21 - Movimento remoto preso após vincular
+
+- Sintoma: ao controlar outra máquina, o cursor local do controlador ficava parado e o alvo recebia coordenadas quase idênticas, causando flicker.
+- Causa raiz: o hook de mouse suprimia `WM_MOUSEMOVE` após publicar, impedindo o cursor local de avançar e ancorando as coordenadas absolutas seguintes.
+- Solução: movimentos publicados sempre seguem para o Windows; apenas cliques e roda publicados continuam suprimidos. Ao receber um pedido para agir como alvo, qualquer captura outbound anterior é desativada.
+- Prevenção: a política testável de supressão exige `false` para movimento e para qualquer evento não publicado; validar fisicamente em dois PCs antes de declarar aceitação de hardware.
+
 ## 2026-09-21 - Executable avulso sem dependências de runtime
 
 - Sintoma: `I:\Downloads\WinputLan.exe` não abria e o Windows registrava `System.IO.FileNotFoundException` em `WinputLan.App.OnStartup`.
 - Causa raiz: a distribuição copiou apenas o executável de um aplicativo WPF .NET Framework dependente de `WinputLan.Core.dll` e `WinputLan.exe.config`.
 - Solução: distribuir os três artefatos da mesma build juntos e verificar os hashes antes do teste de abertura.
-- Prevenção: a cópia manual para Downloads deve preservar o conjunto de runtime (`.exe`, `.dll` e `.exe.config`); para entrega a terceiros, usar o instalador/release que empacota esse conjunto.
+- Prevenção: a cópia manual para Downloads deve preservar o conjunto de runtime (`.exe`, `.dll` e `.exe.config`); para entrega a terceiros, usar o instalador/release que empacota esse conjunto, incluindo explicitamente o arquivo `.exe.config`.
+
+## 2026-09-21 - Aspas inválidas nos parâmetros do firewall do Inno Setup
+
+- Sintoma: `ISCC.exe` interrompia a compilação com `Mismatched or misplaced quotes on parameter "Parameters"`.
+- Causa raiz: o script usava `\"`, que não escapa aspas em valores de diretiva do Inno Setup.
+- Solução: substituir pelas aspas duplas do Inno Setup (`""`) nos parâmetros de criação e remoção da regra de firewall.
+- Prevenção: sempre compilar o `.iss` depois de alterar diretivas `[Run]` ou `[UninstallRun]`; escapes de shell não se aplicam ao parser do Inno Setup.
 
 ## 2026-09-21 - Release executable locked by visual smoke
 
@@ -76,3 +97,17 @@
 - Root cause: the installed .NET runtime exposes only the `System.Drawing` type-forwarder, while the Windows image APIs used for PNG/ICO production are provided by .NET Framework.
 - Resolution: the script re-invokes itself through Windows PowerShell before loading `System.Drawing`.
 - Prevention: run `scripts/normalize-icon.ps1` directly; it selects the compatible runtime itself.
+
+## 2026-09-21 - Pareamento bilateral e papéis de entrada recursivos
+
+- Sintoma: o fluxo exigia confirmação dos dois PCs, não expunha IP/código para uma solicitação simples, e o X do popup podia deixar uma solicitação pendente. Depois de conectar, ambos os lados também podiam capturar/enviar entrada, abrindo feedback/loop.
+- Causa raiz: o coordenador modelava SAS bilateral em vez de solicitação controller→target; a UI não vinculava cancelamento ao estado da requisição; e o transporte não tinha direção de entrada explícita por sessão.
+- Solução: o alvo exibe IP e código de alta entropia, valida challenge-response antes do popup passivo, e somente o aceite alvo habilita controller-send/target-receive. X/Escape/cancelar cancelam o outbound ou negam o inbound, incluindo cancelamento remoto pendente. O transporte publica TCP/TLS somente quando sua lease de geração ainda é corrente, impedindo que uma tentativa cancelada tardia substitua a conexão nova.
+- Prevenção: manter os testes de challenge-response (código/prova inválidos e substituição de certificado não abrem popup), aceite/negação, sessão one-way com frame proibido, cancelamento que torna `AcceptPending` inválido e o loopback A atrasada/B corrente que rejeita publicação tardia.
+
+## 2026-09-21 - Latência degradada por polling, flush e repintura no hot path
+
+- Sintoma: comandos de entrada aguardavam polling de 2 ms, cada frame fazia flush adicional, e eventos de mouse podiam disparar logging/repintura da DataGrid para cada comando, elevando latência e consumo de UI.
+- Causa raiz: fila sem sinalização de disponibilidade, flush redundante após `WriteAsync`, e auditoria visual sem filtro/rate limit para eventos de alta frequência.
+- Solução: a fila passou a aguardar sinal, o flush redundante foi removido, e telemetria/log de mouse usa filtro e atualização agregada de no máximo quatro vezes por segundo; ACK timestampado mede a rota útil.
+- Prevenção: preservar o benchmark loopback com a mesma sessão TLS/30 eventos/ACK comparando polling legado de 2 ms contra drain signal-driven e assert de p95 local <=50 ms, além dos testes de coalescência/clear, janela de latência e throttle de auditoria.

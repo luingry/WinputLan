@@ -4,6 +4,9 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net;
+using System.Net.Sockets;
+using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading;
@@ -13,8 +16,10 @@ using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using WinputLan.Core;
 using WinputLan.Runtime;
+using Forms = System.Windows.Forms;
 
 namespace WinputLan
 {
@@ -30,14 +35,11 @@ namespace WinputLan
         private PeerTransport _listenerTransport;
         private PairingCoordinator _pairingCoordinator;
         private PairingCoordinator _listenerPairingCoordinator;
-        private PairingCoordinator _confirmationCoordinator;
         private CancellationTokenSource _listenerCts;
         private Task _listenerTask;
         private readonly SemaphoreSlim _listenerRestartGate = new SemaphoreSlim(1, 1);
-        private CancellationTokenSource _reconnectCts;
         private PinStore _pinStore;
         private InputRouter _inputRouter;
-        private PairedInputReceiver _inputReceiver;
         private PairedInputReceiver _listenerInputReceiver;
         private CertificateManager _certificateManager;
         private X509Certificate2 _certificate;
@@ -45,21 +47,32 @@ namespace WinputLan
         private LowLevelInputCapture _capture;
         private HotkeyBypassDetector _hotkeyBypass;
         private bool _remoteActive;
+        private Forms.NotifyIcon _trayIcon;
+        private readonly BackgroundLifecycle _backgroundLifecycle;
+        private readonly InputLatencyWindow _latencyWindow = new InputLatencyWindow();
+        private readonly InputAuditPolicy _inputAuditPolicy = new InputAuditPolicy();
+        private DispatcherTimer _accessCodeTimer;
+        private CancellationTokenSource _outboundRequestCts;
 
         public MainWindow(WinputConfig config, AppConfigStore configStore)
         {
             InitializeComponent();
             try { Icon = System.Windows.Media.Imaging.BitmapFrame.Create(new Uri(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "brand", "winput-lan.ico"))); } catch { }
             _config = config ?? WinputConfig.CreateDefault();
+            SizeChanged += (sender, args) => ConfigureMachineRows();
+            _backgroundLifecycle = new BackgroundLifecycle(_config.ContinueInBackground);
             _configStore = configStore;
             LogList.ItemsSource = _logLines;
             LocalNameText.Text = _config.DisplayName;
             LocalAddressText.Text = Environment.MachineName + "  |  TCP " + _config.ListenPort;
+            LocalIpText.Text = "IP: " + LocalIPv4Address();
+            BackgroundModeCheckBox.IsChecked = _config.ContinueInBackground;
             VersionText.Text = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
             RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);
             RefreshKnownPeer();
+            ConfigureMachineRows();
             _transactionLog.Add("local", "local", "Session", "ready");
             RefreshLog();
             _transport.StateChanged += Transport_StateChanged;
@@ -87,25 +100,27 @@ namespace WinputLan
                     _configStore.Save(_config);
                     AddLog("local", "local", "Config", "pin-reset-safe");
                 }
-                _pairingCoordinator = CreatePairingCoordinator(_transport);
+                _pairingCoordinator = CreatePairingCoordinator(_transport, PairingRole.Controller);
                 _listenerTransport = new PeerTransport();
-                _listenerPairingCoordinator = CreatePairingCoordinator(_listenerTransport);
+                _listenerPairingCoordinator = CreatePairingCoordinator(_listenerTransport, PairingRole.Target);
+                UpdateAccessCode(_listenerPairingCoordinator.AccessCode);
                 _listenerCts = new CancellationTokenSource();
                 _listenerTask = StartListenerAsync(_listenerCts.Token);
                 _inputRouter = new InputRouter(_inputQueue, _transport, _inputSink);
-                _inputReceiver = new PairedInputReceiver(_transport, _inputSink);
                 _listenerInputReceiver = new PairedInputReceiver(_listenerTransport, _inputSink);
                 _inputRouter.InputAudited += AuditInput;
-                _inputReceiver.InputAudited += AuditInput;
                 _listenerInputReceiver.InputAudited += AuditInput;
-                _capture = new LowLevelInputCapture(_inputRouter, _hotkeyBypass, action =>
+                _inputRouter.InputLatencyMeasured += latency =>
                 {
-                    if (!_remoteActive) return false;
-                    Dispatcher.BeginInvoke(new Action(() => SetInputTarget(action == HotkeyAction.SelectRemote)));
-                    return true;
-                });
-                _capture.Start();
-                AddLog("local", "local", "Hooks", "active");
+                    _latencyWindow.Record(latency);
+                    double p50;
+                    if (_latencyWindow.TryGetP50(DateTime.UtcNow, TimeSpan.FromMilliseconds(250), out p50)) Dispatcher.BeginInvoke(new Action(() => LatencyText.Text = "Latência de entrada p50: " + Math.Round(p50) + " ms"));
+                };
+                _accessCodeTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+                _accessCodeTimer.Tick += (s, e) => _listenerPairingCoordinator?.RefreshExpiredAccessCode();
+                _accessCodeTimer.Start();
+                CreateTrayIcon();
+                AddLog("local", "local", "Hooks", "armed-controller-only");
             }
             catch (Exception ex)
             {
@@ -116,23 +131,36 @@ namespace WinputLan
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
+            if (_backgroundLifecycle.ShouldHideOnClose) { e.Cancel = true; HideToTray(); return; }
+            Cleanup();
+        }
+
+        private void Cleanup()
+        {
+            if (!_backgroundLifecycle.TryBeginCleanup()) return;
             _capture?.Dispose();
             _inputRouter?.Dispose();
-            _inputReceiver?.Dispose();
             _listenerInputReceiver?.Dispose();
             _inputSink.ReleaseAll();
             _pairingCoordinator?.Dispose();
             _listenerPairingCoordinator?.Dispose();
             _listenerCts?.Cancel();
-            _reconnectCts?.Cancel();
+            _outboundRequestCts?.Cancel();
+            _accessCodeTimer?.Stop();
             _listenerTransport?.Dispose();
             _transport.Dispose();
             _hotkeys?.Dispose();
+            if (_trayIcon != null) { _trayIcon.Visible = false; _trayIcon.Dispose(); _trayIcon = null; }
             try { _configStore?.Save(_config); } catch { }
         }
 
         private void PairNowButton_Click(object sender, RoutedEventArgs e) { BeginPairing(); }
-        private void ClosePairingButton_Click(object sender, RoutedEventArgs e) { PairingOverlay.Visibility = Visibility.Collapsed; }
+        private void ClosePairingButton_Click(object sender, RoutedEventArgs e)
+        {
+            if (TargetApprovalPanel.Visibility == Visibility.Visible) _listenerPairingCoordinator?.DenyPending();
+            else CancelOutboundRequest();
+            PairingOverlay.Visibility = Visibility.Collapsed; PairNowButton.Focus();
+        }
         private void Chrome_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             if (e.ClickCount == 2) WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized;
@@ -144,28 +172,39 @@ namespace WinputLan
         private void RemoteMachineRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) { SetInputTarget(true); }
         private async void ConnectPairButton_Click(object sender, RoutedEventArgs e)
         {
-            BeginPairing();
             var host = (RemoteAddressBox.Text ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(host)) { MessageBox.Show("Enter a peer address.", "Pairing", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            try { _pairingCoordinator.StartRequest(RemoteCodeBox.Text); }
+            catch (Exception ex) { PairCodeStateText.Text = ex.Message; RemoteCodeBox.Focus(); return; }
             _config.RemoteAddress = host;
+            _outboundRequestCts?.Cancel(); var requestCts = new CancellationTokenSource(); _outboundRequestCts = requestCts;
             try
             {
                 _configStore.Save(_config);
                 AddLog("local", "remote", "Transport", "connecting");
-                var pairingMode = string.IsNullOrWhiteSpace(_config.PinnedFingerprint);
                 var port = _config.RemotePort <= 0 ? _config.ListenPort : _config.RemotePort;
-                await _transport.ConnectAsync(host, port, _certificate, _config.PinnedFingerprint, pairingMode, CancellationToken.None);
-                if (!pairingMode)
-                {
-                    _reconnectCts?.Cancel();
-                    _reconnectCts = new CancellationTokenSource();
-                    _ = MonitorReconnectAsync(host, port, _reconnectCts.Token);
-                }
+                ConnectPairButton.IsEnabled = false; PairCodeStateText.Text = "Enviando pedido…";
+                await _transport.ConnectAsync(host, port, _certificate, null, true, requestCts.Token);
+                if (!OwnsOutboundRequest(requestCts)) return;
+                if (requestCts.IsCancellationRequested) _transport.Disconnect("access request cancelled");
+            }
+            catch (OperationCanceledException)
+            {
+                if (!OwnsOutboundRequest(requestCts)) return;
+                _transport.Disconnect("access request cancelled");
+                PairCodeStateText.Text = "Pedido cancelado. Você pode tentar novamente.";
             }
             catch (Exception ex)
             {
+                if (!OwnsOutboundRequest(requestCts)) return;
+                if (requestCts.IsCancellationRequested) { _transport.Disconnect("access request cancelled"); PairCodeStateText.Text = "Pedido cancelado. Você pode tentar novamente."; return; }
                 AddLog("local", "remote", "Transport", "failed");
                 MessageBox.Show("Could not connect to the peer. Check the address, Private firewall rule and pairing state.\n\n" + ex.Message, "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally
+            {
+                if (OwnsOutboundRequest(requestCts)) { ConnectPairButton.IsEnabled = true; _outboundRequestCts = null; }
+                requestCts.Dispose();
             }
         }
         private void MachinesButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToTop(); SetInputTarget(false); }
@@ -173,20 +212,16 @@ namespace WinputLan
         private void LogNavButton_Click(object sender, RoutedEventArgs e) { LogSection.BringIntoView(); }
         private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(); }
         private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); RefreshLog(); }
-        private void ConfirmPairButton_Click(object sender, RoutedEventArgs e)
-        {
-            try { _confirmationCoordinator?.ConfirmLocal(_confirmationCoordinator.CurrentCode); }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "Pairing", MessageBoxButton.OK, MessageBoxImage.Warning); }
-        }
-        private void HowPairingButton_Click(object sender, RoutedEventArgs e) { MessageBox.Show("Both PCs create a TLS transcript, display the same six-digit SAS, and require bilateral confirmation. The SAS is never sent. The resulting peer certificate is pinned and protected by Windows DPAPI.", "Pairing", MessageBoxButton.OK, MessageBoxImage.Information); }
+        private void AcceptPairButton_Click(object sender, RoutedEventArgs e) { try { _listenerPairingCoordinator.AcceptPending(); PairingOverlay.Visibility = Visibility.Collapsed; } catch (Exception ex) { MessageBox.Show(ex.Message, "Acesso", MessageBoxButton.OK, MessageBoxImage.Warning); } }
+        private void DenyPairButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.DenyPending(); PairingOverlay.Visibility = Visibility.Collapsed; }
+        private void RenewAccessCodeButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.RenewAccessCode(); }
 
         private void BeginPairing()
         {
             PairingOverlay.Visibility = Visibility.Visible;
-            PairCodeText.Text = "—— ——";
-            PairCodeStateText.Text = "Aguardando uma oferta remota";
-            ConfirmPairButton.IsEnabled = false;
-            AddLog("local", "remote", "Pairing", "waiting");
+            ControllerPairPanel.Visibility = Visibility.Visible; TargetApprovalPanel.Visibility = Visibility.Collapsed;
+            PairingTitleText.Text = "Controlar outra máquina"; PairingDescriptionText.Text = "Informe o IP e o código exibidos no PC que você quer controlar.";
+            PairCodeStateText.Text = "O PC controlado precisa aceitar o pedido."; RemoteAddressBox.Focus(); AddLog("local", "remote", "Access", "ready");
         }
 
         private void RefreshKnownPeer()
@@ -200,10 +235,24 @@ namespace WinputLan
             {
                 RemoteAddressText.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "Endereço da rede local" : _config.RemoteAddress;
                 RemoteNameText.Text = "Máquina vinculada";
-                RemoteStateText.Text = "Pronto para receber entrada";
+                RemoteStateText.Text = "Pronto para enviar entrada";
                 RemoteBadgeText.Text = "Disponível";
                 LatencyText.Text = "Aguardando atalho";
             }
+        }
+
+        private void ConfigureMachineRows()
+        {
+            var compact = ActualWidth > 0 && ActualWidth <= 1100;
+            foreach (var row in new[] { LocalMachineRow, RemoteMachineRow })
+            {
+                if (row.ColumnDefinitions.Count != 6) continue;
+                row.ColumnDefinitions[0].Width = new GridLength(compact ? 78 : 98);
+                row.ColumnDefinitions[2].Width = new GridLength(compact ? 100 : 132);
+                row.ColumnDefinitions[4].Width = new GridLength(compact ? 200 : 255);
+                row.ColumnDefinitions[5].Width = new GridLength(compact ? 30 : 42);
+            }
+            LocalNameText.FontSize = compact ? 18 : 22;
         }
 
         private static string ShortcutTail(string value)
@@ -213,19 +262,27 @@ namespace WinputLan
             return parts.Length == 0 ? value : parts[parts.Length - 1].Trim();
         }
 
-        private PairingCoordinator CreatePairingCoordinator(PeerTransport transport)
+        private PairingCoordinator CreatePairingCoordinator(PeerTransport transport, PairingRole role)
         {
-            var coordinator = new PairingCoordinator(transport, _config, _certificate);
-            coordinator.CodeReady += code => Dispatcher.Invoke(() =>
+            var coordinator = new PairingCoordinator(transport, _config, _certificate, role);
+            coordinator.AccessCodeChanged += code => Dispatcher.BeginInvoke(new Action(() => UpdateAccessCode(code)));
+            coordinator.AccessRequestReceived += request => Dispatcher.BeginInvoke(new Action(() => ShowAccessRequest(request)));
+            coordinator.PendingRequestCancelled += () => Dispatcher.BeginInvoke(new Action(() =>
             {
-                _confirmationCoordinator = coordinator;
-                PairCodeText.Text = code.Substring(0, 3) + " " + code.Substring(3);
-                PairCodeStateText.Text = "Verifique este código na outra máquina";
-                ConfirmPairButton.IsEnabled = true;
-                AddLog("remote", "local", "Pairing", "code-ready");
-            });
-            coordinator.PairingCompleted += record => Dispatcher.Invoke(() => CompletePairing(record, ReferenceEquals(coordinator, _pairingCoordinator)));
-            coordinator.PairingFailed += reason => Dispatcher.Invoke(() => AddLog("remote", "local", "Pairing", "failed"));
+                if (ReferenceEquals(coordinator, _listenerPairingCoordinator) && TargetApprovalPanel.Visibility == Visibility.Visible)
+                {
+                    PairingOverlay.Visibility = Visibility.Collapsed;
+                    PairNowButton.Focus();
+                    AddLog("remote", "local", "Access", "request-cancelled");
+                }
+            }));
+            coordinator.PairingCompleted += record => Dispatcher.BeginInvoke(new Action(() => CompletePairing(record, ReferenceEquals(coordinator, _pairingCoordinator))));
+            coordinator.PairingFailed += reason => Dispatcher.BeginInvoke(new Action(() =>
+            {
+                PairCodeStateText.Text = "Pedido encerrado: " + reason;
+                ConnectPairButton.IsEnabled = true;
+                AddLog("remote", "local", "Access", "failed");
+            }));
             return coordinator;
         }
 
@@ -233,23 +290,20 @@ namespace WinputLan
         {
             try
             {
-                _pinStore.Save(record);
-                _config.PinnedSecret = _pinStore.ExportProtectedBlob();
-                _config.PinnedDeviceId = record.DeviceId;
-                _config.PinnedFingerprint = record.CertificateFingerprint;
-                _configStore.Save(_config);
-                PairCodeStateText.Text = "Confirmado nos dois PCs · certificado fixado";
-                ConfirmPairButton.IsEnabled = false;
-                PairingOverlay.Visibility = Visibility.Collapsed;
-                RefreshKnownPeer();
-                AddLog("local", "remote", "Pairing", "confirmed");
-                if (outbound) _ = RestartListenerAsync();
-                if (!string.IsNullOrWhiteSpace(_config.RemoteAddress))
+                if (outbound)
                 {
-                    _reconnectCts?.Cancel();
-                    _reconnectCts = new CancellationTokenSource();
-                    _ = MonitorReconnectAsync(_config.RemoteAddress, _config.RemotePort <= 0 ? _config.ListenPort : _config.RemotePort, _reconnectCts.Token);
+                    _pinStore.Save(record);
+                    _config.PinnedSecret = _pinStore.ExportProtectedBlob();
+                    _config.PinnedDeviceId = record.DeviceId;
+                    _config.PinnedFingerprint = record.CertificateFingerprint;
+                    _configStore.Save(_config);
                 }
+                PairCodeStateText.Text = outbound ? "Acesso aceito. Controle pronto." : "Acesso autorizado.";
+                PairingOverlay.Visibility = Visibility.Collapsed;
+                if (outbound) RefreshKnownPeer();
+                AddLog("local", "remote", "Access", outbound ? "controller-ready" : "target-ready");
+                if (outbound) EnsureControllerCapture();
+                // A new remote-control session always requires a fresh target code and approval.
             }
             catch { AddLog("local", "remote", "Pairing", "pin-save-failed"); }
         }
@@ -275,7 +329,7 @@ namespace WinputLan
             {
                 try
                 {
-                    await _listenerTransport.ListenOnceAsync(_config.ListenPort, _certificate, _config.PinnedFingerprint, string.IsNullOrWhiteSpace(_config.PinnedFingerprint), listenerToken);
+                    await _listenerTransport.ListenOnceAsync(_config.ListenPort, _certificate, null, true, listenerToken);
                 }
                 catch (OperationCanceledException) { return; }
                 catch (Exception) { AddLog("remote", "local", "Listener", "failed"); try { await Task.Delay(500, listenerToken).ConfigureAwait(false); } catch (OperationCanceledException) { return; } }
@@ -303,7 +357,7 @@ namespace WinputLan
 
         private void SetInputTarget(bool remote)
         {
-            if (remote && (_transport.State != PeerConnectionState.Connected || string.IsNullOrWhiteSpace(_config.PinnedDeviceId)))
+            if (remote && (_transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend))
             {
                 AddLog("local", "remote", "Target", "blocked-unpaired");
                 return;
@@ -311,8 +365,8 @@ namespace WinputLan
             _remoteActive = remote;
             _inputRouter?.SetRemoteActive(remote);
             RemoteDot.Fill = remote ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("MutedBrush");
-            TargetStateText.Text = remote ? "Recebendo entrada" : "Aguardando atalho";
-            RemoteStateText.Text = remote ? "Entrada ativa nesta máquina" : "Pronto para receber entrada";
+            TargetStateText.Text = remote ? "Enviando entrada" : "Aguardando atalho";
+            RemoteStateText.Text = remote ? "Enviando entrada para máquina" : "Pronto para enviar entrada";
             RemoteBadgeText.Text = remote ? "Ativa" : "Disponível";
             RemoteShortcutStatusText.Text = remote ? "Ativo" : "Configurado";
             AddLog("local", remote ? "remote" : "local", "Target", remote ? "selected" : "restored");
@@ -322,11 +376,95 @@ namespace WinputLan
         {
             Dispatcher.Invoke(() =>
             {
-                if (state == PeerConnectionState.Connected) { RemoteNameText.Text = "Máquina vinculada"; RemoteAddressText.Text = _config.RemoteAddress ?? "Rede local"; LatencyText.Text = "Conectada agora"; RemoteStateText.Text = "Pronto para receber entrada"; }
-                else if (state == PeerConnectionState.Offline) { LatencyText.Text = "Última conexão indisponível"; RemoteStateText.Text = "Não está acessível agora"; RemoteBadgeText.Text = "Offline"; }
+                if (state == PeerConnectionState.Connected) { RemoteNameText.Text = "Máquina vinculada"; RemoteAddressText.Text = _config.RemoteAddress ?? "Rede local"; LatencyText.Text = "Conectada agora"; RemoteStateText.Text = "Pronto para enviar entrada"; }
+                else if (state == PeerConnectionState.Offline) { _capture?.Dispose(); _capture = null; LatencyText.Text = "Última conexão indisponível"; RemoteStateText.Text = "Não está acessível agora"; RemoteBadgeText.Text = "Offline"; }
                 AddLog("remote", "local", "Transport", state.ToString());
             });
         }
+
+        private void UpdateAccessCode(string code)
+        {
+            if (string.IsNullOrWhiteSpace(code)) return;
+            LocalAccessCodeText.Text = WinputLan.Core.AccessCode.Format(code);
+        }
+
+        private void EnsureControllerCapture()
+        {
+            if (_capture != null) return;
+            _capture = new LowLevelInputCapture(_inputRouter, _hotkeyBypass, action =>
+            {
+                if (!_remoteActive) return false;
+                Dispatcher.BeginInvoke(new Action(() => SetInputTarget(action == HotkeyAction.SelectRemote)));
+                return true;
+            });
+            _capture.Start();
+            AddLog("local", "remote", "Hooks", "controller-active");
+        }
+
+        private void ShowAccessRequest(AccessRequest request)
+        {
+            // A machine accepting control must never retain an outbound capture from an older session.
+            StopControllerCapture();
+            PairingOverlay.Visibility = Visibility.Visible;
+            ControllerPairPanel.Visibility = Visibility.Collapsed; TargetApprovalPanel.Visibility = Visibility.Visible;
+            PairingTitleText.Text = "Permitir controle?";
+            PairingDescriptionText.Text = "O código foi validado. Você decide se esta sessão pode começar.";
+            RequestingMachineText.Text = string.IsNullOrWhiteSpace(request.DisplayName) ? "Máquina solicitante" : request.DisplayName;
+            RequestingAddressText.Text = "IP solicitante: " + (_listenerTransport.RemoteEndpoint ?? "rede local");
+            AcceptPairButton.Focus(); AddLog("remote", "local", "Access", "approval-requested");
+        }
+
+        private void StopControllerCapture()
+        {
+            _remoteActive = false;
+            _inputRouter?.SetRemoteActive(false);
+            _capture?.Dispose();
+            _capture = null;
+        }
+
+        private static string LocalIPv4Address()
+        {
+            try
+            {
+                var candidates = NetworkInterface.GetAllNetworkInterfaces().SelectMany(network => network.GetIPProperties().UnicastAddresses.Select(address => new LanAddressCandidate
+                {
+                    Address = address.Address.ToString(), InterfaceUp = network.OperationalStatus == OperationalStatus.Up,
+                    HasGateway = network.GetIPProperties().GatewayAddresses.Any(gateway => gateway.Address.AddressFamily == AddressFamily.InterNetwork),
+                    IsEthernetOrWifi = network.NetworkInterfaceType == NetworkInterfaceType.Ethernet || network.NetworkInterfaceType == NetworkInterfaceType.Wireless80211
+                }));
+                return LanAddressSelector.Select(candidates) ?? "IP LAN não detectado";
+            }
+            catch { return "IP LAN não detectado"; }
+        }
+
+        private void CancelOutboundRequest()
+        {
+            _outboundRequestCts?.Cancel(); _pairingCoordinator?.CancelRequest(); _transport.Disconnect("access request cancelled");
+            ConnectPairButton.IsEnabled = true; PairCodeStateText.Text = "Pedido cancelado. Você pode tentar novamente.";
+        }
+
+        private bool OwnsOutboundRequest(CancellationTokenSource requestCts)
+        {
+            return RequestAttemptOwnership.IsCurrent(_outboundRequestCts, requestCts);
+        }
+
+        private void CreateTrayIcon()
+        {
+            if (_trayIcon != null) return;
+            _trayIcon = new Forms.NotifyIcon { Text = "Winput LAN", Icon = LoadTrayIcon(), Visible = false };
+            var menu = new Forms.ContextMenuStrip();
+            menu.Items.Add("Restaurar", null, (s, e) => Dispatcher.BeginInvoke(new Action(RestoreFromTray)));
+            menu.Items.Add("Sair", null, (s, e) => Dispatcher.BeginInvoke(new Action(ExitFromTray)));
+            _trayIcon.ContextMenuStrip = menu;
+            _trayIcon.DoubleClick += (s, e) => Dispatcher.BeginInvoke(new Action(RestoreFromTray));
+        }
+
+        private void Window_StateChanged(object sender, EventArgs e) { if (_backgroundLifecycle.ShouldHideOnMinimize && WindowState == WindowState.Minimized) HideToTray(); }
+        private void Window_PreviewKeyDown(object sender, KeyEventArgs e) { if (e.Key == Key.Escape && PairingOverlay.Visibility == Visibility.Visible) { ClosePairingButton_Click(sender, e); e.Handled = true; } }
+        private void BackgroundModeCheckBox_Changed(object sender, RoutedEventArgs e) { _config.ContinueInBackground = BackgroundModeCheckBox.IsChecked == true; _backgroundLifecycle.ContinueInBackground = _config.ContinueInBackground; try { _configStore.Save(_config); } catch { } }
+        private void HideToTray() { CreateTrayIcon(); Hide(); _trayIcon.Visible = true; _trayIcon.ShowBalloonTip(1000, "Winput LAN", "Continua em execução na área de notificação.", Forms.ToolTipIcon.Info); }
+        private void RestoreFromTray() { Show(); WindowState = WindowState.Normal; Activate(); if (_trayIcon != null) _trayIcon.Visible = false; }
+        private void ExitFromTray() { _backgroundLifecycle.RequestExplicitExit(); if (_trayIcon != null) _trayIcon.Visible = false; Close(); }
 
         private void AddLog(string origin, string destination, string type, string status)
         {
@@ -336,8 +474,15 @@ namespace WinputLan
 
         private void AuditInput(InputKind kind, string status)
         {
+            if (!_inputAuditPolicy.ShouldEmit(kind, status, DateTime.UtcNow)) return;
             var received = status.StartsWith("received", StringComparison.Ordinal);
             Dispatcher.BeginInvoke(new Action(() => AddLog(received ? "remote" : "local", received ? "local" : "remote", "Input." + kind, status)));
+        }
+
+        private static System.Drawing.Icon LoadTrayIcon()
+        {
+            try { return new System.Drawing.Icon(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "brand", "winput-lan.ico")); }
+            catch { return System.Drawing.SystemIcons.Application; }
         }
 
         private void RefreshLog()
@@ -387,21 +532,26 @@ namespace WinputLan
             UpdatesButton.IsEnabled = false; UpdatesButton.Content = "Updates · checking…";
             try
             {
-                using (var http = new HttpClient())
+                using (var handler = new HttpClientHandler { AllowAutoRedirect = false })
+                using (var http = new HttpClient(handler))
                 {
-                    var updater = new GitHubUpdater(http, new WindowsAuthenticodeVerifier(), Process.GetCurrentProcess().MainModule.FileName);
+                    var updater = new GitHubUpdater(http);
                     var manifest = await updater.ReadManifestAsync(new Uri("https://github.com/luingry/WinputLan/releases/latest/download/update-manifest.json"), CancellationToken.None);
                     string reason;
                     if (!ReleaseManifestValidator.TryValidate(manifest, InstalledVersion, out reason))
                     {
                         UpdatesButton.Content = "Updates · up to date"; AddLog("github", "local", "Update", "no-update");
-                        MessageBox.Show("No newer signed update is available.\n\n" + reason, "Updates", MessageBoxButton.OK, MessageBoxImage.Information); return;
+                        MessageBox.Show("No newer verified update is available.\n\n" + reason, "Updates", MessageBoxButton.OK, MessageBoxImage.Information); return;
                     }
                     UpdatesButton.Content = "Updates · downloading…";
                     var installer = await updater.DownloadAndValidateAsync(manifest, InstalledVersion, Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), CancellationToken.None);
                     UpdatesButton.Content = "Updates · ready"; AddLog("github", "local", "Update", "validated");
-                    if (MessageBox.Show("A signed update " + manifest.Version + " is ready. Start its installer now?", "Updates", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                    if (MessageBox.Show("Verified update " + manifest.Version + " is ready. Start its installer now?", "Updates", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
+                    {
                         Process.Start(new ProcessStartInfo(installer) { UseShellExecute = true });
+                        // Exit for real (not to tray) so the setup can replace the locked executable.
+                        ExitFromTray();
+                    }
                 }
             }
             catch (Exception ex) { UpdatesButton.Content = "Updates · error"; AddLog("github", "local", "Update", "error"); MessageBox.Show("Update check failed safely. No installer was started.\n\n" + ex.Message, "Updates", MessageBoxButton.OK, MessageBoxImage.Warning); }

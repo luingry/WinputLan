@@ -5,6 +5,19 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-09-21
+
+### Added
+
+- Start Menu shortcut and RSA-signed OTA manifests for unsigned public setup releases.
+- Passive one-way access flow, background tray option, and input latency instrumentation.
+
+### Fixed
+
+- Pairing overlay close/cancel behavior and the Controlar outra máquina icon/text color.
+- Remote mouse stuck in place: pointer movement is no longer suppressed on the controller.
+- The app exits after launching a verified update so the setup can replace its files.
+
 ## [0.1.0] - 2026-09-21
 
 ### Added
@@ -22,4 +35,4 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 - No discovery, subnet scan, clipboard, telemetry, cloud control, secure desktop
   automation, or physical two-PC release acceptance yet.
-- Production Authenticode certificate and signed public release are not present.
+- Physical two-PC release acceptance is still pending.

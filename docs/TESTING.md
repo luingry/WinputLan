@@ -5,19 +5,28 @@
 `tests/WinputLan.Tests` is a dependency-light net8 console suite. It covers:
 
 - frame and input binary round trips plus malformed bounds;
-- symmetric transcript, SAS, pin code, HKDF and bilateral confirmation;
+- transcript, pin code and HKDF compatibility, plus access-proof certificate-substitution and purpose/replay rejection;
 - DPAPI abstraction round trip and corrupt pin fail-safe;
 - queue capacity, mouse-only coalescing, and key/button order;
+- queue signal integrity after coalesce/clear, LAN IP selection, latency-window throttling, and audit-log rate limiting;
 - global hotkey parsing and reserved combinations;
 - bounded metadata-only logging;
 - corrupt/invalid config rejection;
-- newer SemVer, GitHub HTTPS, SHA-256 and Authenticode manifest invariants;
+- newer SemVer, pinned GitHub HTTPS, SHA-256 and RSA manifest invariants,
+  including tampering of every signed field, signature, algorithm and key id;
 - capped reconnect backoff.
 
-The net48 loopback harness starts two independent transports and certificates,
-performs TLS mutual authentication, receives equal SAS values, confirms both
-sides, emits pin records, and sends one synthetic key frame to a fake sink. It
-does not call a physical keyboard or mouse.
+The net48 loopback harness starts two independent transports and certificates.
+It proves that a wrong high-entropy code/proof produces no target prompt, a
+correct code can be denied, target cancellation clears its passive prompt and
+prevents late acceptance, target approval creates a controller-send/target-receive
+session, and a new session works after closure. It rejects forbidden target input and measures
+the same TLS session, 30 serial timestamped input events, and target ACKs with a
+test-only legacy 2ms polling drain versus the production signal-driven drain;
+the local loopback p95 assertion is <=50ms. It does not call a
+physical keyboard or mouse and is not evidence for two-PC Wi-Fi latency.
+It also round-trips the persisted background preference and asserts the
+minimize/close/explicit-Exit lifecycle decisions, including exactly-once cleanup.
 
 ## Commands
 

@@ -1,4 +1,4 @@
-# Winput LAN protocol v1
+# Winput LAN protocol v2
 
 The transport is a persistent TLS 1.2 stream. Every frame is little-endian:
 
@@ -12,14 +12,41 @@ The transport is a persistent TLS 1.2 stream. Every frame is little-endian:
 | 16 | n | payload |
 
 Types are `Hello`, `PairingOffer`, `PairingConfirm`, `Input`, `Heartbeat`,
-`HeartbeatAck`, `Goodbye`, and `Error`.
+`HeartbeatAck`, `Goodbye`, `Error`, `ReleaseAll`, and `InputAck`.
 
 The fixed input record is 32 bytes: kind, reserved byte, flags, X, Y,
 mouse-data, virtual key, scan code, UTC ticks, and a reserved uint. Keyboard
 down/up and mouse button down/up are never coalesced. Only a tail mouse move
 may be replaced by a newer move.
 
-Hello is a line-safe `deviceId|certificateFingerprint|nonce-base64` field. The
-pairing digest is sent only as a bilateral confirmation token; the six-digit
-SAS is local display state. A peer that fails version, length, sequence, TLS,
-or pin checks is disconnected and all remote input state is released.
+The controlled machine generates and displays a 16-character, unambiguous
+Base32 CSPRNG access code (80 bits), formatted `XXXX XXXX XXXX XXXX`, below its
+LAN IPv4 address. The code is never sent on the wire or written to logs/pins.
+This is high-entropy certificate/nonce-bound challenge-response, not PAKE.
+
+The controller sends `PairingOffer` `offer|controllerDeviceId|base64(displayName)|controllerNonce`.
+The target returns `PairingConfirm` `challenge|targetDeviceId|targetNonce`.
+Both sides canonically construct the v2 transcript from the version, controller
+and target IDs, the observed controller and target TLS certificate fingerprints,
+and both 32-byte CSPRNG nonces. The controller sends `PairingOffer`
+`proof|HMAC` where HMAC-SHA256 is made with an HKDF-SHA256 key derived from the
+human code and transcript. The target uses a fixed-time comparison; only a
+valid proof creates the passive approval prompt. Different certificates under a
+TLS first-session MITM produce different transcripts, so the proof is rejected.
+
+The target approval returns a separate `PairingConfirm`
+`accept|targetDeviceId|HMAC` proof bound to the `accept` purpose and same
+transcript; the controller verifies it before enabling input. `Error` is a
+generic denial and closes the request. Codes expire after ten minutes, renew
+after accept or denial (preventing proof replay), and can be renewed by the
+target. Three bad attempts impose a 30-second target cooldown. Disconnecting a
+pending request cancels the target prompt without permitting a late acceptance.
+
+After approval the controller transport is send-only for `Input` and the target
+is receive-only. Forbidden input frames are rejected before injection. Every
+accepted input is answered by `InputAck` carrying its original UTC ticks for
+lightweight latency telemetry. The benchmark compares its signal-driven drain
+against a test-only 2ms polling drain under the same TLS/ACK load. `WriteAsync`
+is not followed by a redundant flush, but no latency causality is claimed for
+that removal. Failed TLS, code, framing, sequence, or
+direction checks close the transport and release remote input state.
