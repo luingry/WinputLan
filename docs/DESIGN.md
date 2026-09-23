@@ -12,7 +12,10 @@ navigation destinations. The shortcut editor uses the same in-window overlay,
 including focusable text fields, error copy, cancel and save actions.
 
 The palette is `#101519` / `#171C20` / `#20262B`, with `#79D88B` reserved for
-connection, selection and primary action. Icons are local outline paths and the
+connection, selection and primary action. Icons come only from Lucide (ISC),
+stored as 24×24 stroke geometries in `App.xaml` and drawn by `Controls/Icon`.
+Type scale: page 26 / dialog 22 / section 18 / card 17 / body 14 / secondary 13 /
+overline 11, SemiBold for titles and values only. The
 only persisted peer shown is the actual pinned peer; otherwise the machines
 component renders its empty state. The dashboard remains scrollable below the
 primary viewport instead of clipping actions or the input log.

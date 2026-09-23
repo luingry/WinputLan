@@ -82,7 +82,7 @@ namespace WinputLan
             _isElevated = ProcessElevation.IsCurrentElevated();
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
             _suppressStartupToggle = true; StartWithWindowsCheckBox.IsChecked = _config.StartWithWindows; _suppressStartupToggle = false;
-            VersionText.Text = "v" + InstalledVersion;
+            VersionText.Text = "v" + InstalledVersion + (_isElevated ? "  ·  Admin" : string.Empty);
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
             RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);
@@ -285,6 +285,8 @@ namespace WinputLan
             // UAC declined: keep the setting off so the next start does not prompt unexpectedly.
             _config.RunElevated = false; try { _configStore.Save(_config); } catch { }
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = false; _suppressElevationToggle = false;
+            // The UAC prompt ignores remote input, so a PC toggled while being controlled can never confirm it.
+            MessageBox.Show("O Windows não confirmou a permissão de administrador, então a opção continua desligada.\n\nA tela de confirmação do Windows (UAC) só aceita o mouse e o teclado físicos deste PC. Ative a opção usando o mouse e o teclado deste PC e confirme o aviso.", "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
 
         // UIPI silently discards input injected into elevated windows; tell the person at this PC why control paused.
@@ -359,7 +361,7 @@ namespace WinputLan
         {
             PairingOverlay.Visibility = Visibility.Visible;
             ControllerPairPanel.Visibility = Visibility.Visible; TargetApprovalPanel.Visibility = Visibility.Collapsed;
-            PairingTitleText.Text = "Controlar outra máquina"; PairingDescriptionText.Text = "Informe o IP e o código exibidos no PC que você quer controlar.";
+            PairingTitleText.Text = "Conectar outra máquina"; PairingDescriptionText.Text = "Informe o IP e o código exibidos no PC que você quer controlar.";
             PairCodeStateText.Text = HasRecognizedTarget ? "Para " + TargetDisplayName + " (reconhecida) deixe o código em branco: basta o aceite." : "O PC controlado precisa aceitar o pedido."; RemoteCodeBox.Clear(); RemoteAddressBox.Focus(); AddLog("local", "remote", "Access", "ready");
         }
 
@@ -393,8 +395,6 @@ namespace WinputLan
             NoPeersState.Visibility = model.Other.Visible ? Visibility.Collapsed : Visibility.Visible;
             var hasTarget = target != null || legacyPeer;
             RemoteShortcutTargetText.Text = hasTarget ? (target != null && !string.IsNullOrWhiteSpace(target.DisplayName) ? target.DisplayName : "Máquina vinculada") : "Nenhuma máquina";
-            RemoteShortcutBadge.Visibility = hasTarget ? Visibility.Visible : Visibility.Collapsed;
-            RemoteShortcutStatusText.Text = _remoteActive ? "Ativo" : "Configurado";
             LocalShortcutTargetText.Text = string.IsNullOrWhiteSpace(_config.DisplayName) ? "Este computador" : _config.DisplayName + " (este PC)";
         }
 
@@ -514,13 +514,11 @@ namespace WinputLan
             var compact = ActualWidth > 0 && ActualWidth <= 1100;
             foreach (var row in new[] { LocalMachineRow, RemoteMachineRow })
             {
-                if (row.ColumnDefinitions.Count != 6) continue;
-                row.ColumnDefinitions[0].Width = new GridLength(compact ? 78 : 98);
-                row.ColumnDefinitions[2].Width = new GridLength(compact ? 100 : 132);
-                row.ColumnDefinitions[4].Width = new GridLength(compact ? 200 : 255);
-                row.ColumnDefinitions[5].Width = new GridLength(compact ? 30 : 42);
+                if (row.ColumnDefinitions.Count != 4) continue;
+                row.ColumnDefinitions[0].Width = new GridLength(compact ? 64 : 76);
+                row.ColumnDefinitions[2].Width = new GridLength(compact ? 210 : 260);
+                row.ColumnDefinitions[3].Width = new GridLength(compact ? 32 : 44);
             }
-            LocalNameText.FontSize = compact ? 18 : 22;
         }
 
         private static string ShortcutTail(string value)

@@ -5,6 +5,20 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.4] - 2026-09-23
+
+### Changed
+
+- Icons switched to a single library (Lucide, ISC licence) drawn by a new `Icon` control.
+- Tighter type scale and font weights; buttons are more compact (40 px primary/secondary).
+- "Controlar outra máquina" renamed to "Conectar outra máquina", now with a link icon.
+- Machine rows drop the mouse/keyboard icons and their divider; the shortcuts list drops its status badges.
+- README trimmed to end-user guidance.
+
+### Fixed
+
+- Declining or missing the UAC prompt for "Permitir controlar apps de administrador" now explains why the option stayed off, and the title bar shows "Admin" when the app runs elevated.
+
 ## [0.3.3] - 2026-09-23
 
 ### Fixed

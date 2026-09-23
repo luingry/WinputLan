@@ -1,5 +1,18 @@
 # Errors and prevention
 
+## 2026-09-23 - Smoke visual reaponta a inicialização com o Windows para o build de dev
+
+- Sintoma: após abrir `src/WinputLan/bin/Release/net48/WinputLan.exe` para screenshot, `HKCU\...\Run\WinputLan` passou a apontar para o build de dev em vez de `C:\Program Files\Winput LAN\WinputLan.exe`.
+- Causa raiz: ao iniciar, o app reescreve a entrada de inicialização para o próprio executável quando "Iniciar com o Windows" está ligado na config compartilhada (`%LOCALAPPDATA%\WinputLan`).
+- Solução: reabrir o app instalado (ele reescreve a entrada para o próprio caminho).
+- Prevenção: depois de qualquer smoke com o build de dev, reabrir a instância instalada; capturar com `PrintWindow` pelo PID do processo lançado (a janela pode ficar atrás de outra).
+
+## 2026-09-23 - Estilo implícito de TextBlock sobrescreve tamanhos de botões
+
+- Sintoma (evitado): um `FontSize` no estilo implícito `TextBlock` do `App.xaml` anula o `FontSize` de `Button`/`CheckBox` com conteúdo em texto.
+- Causa raiz: estilos implícitos no nível de Application alcançam os TextBlocks gerados dentro de templates.
+- Prevenção: o tamanho base (14) fica no `Window`; o estilo implícito define só família e cor.
+
 ## 2026-09-21 - OTA bloqueado em instalações públicas sem Authenticode
 
 - Sintoma: o updater recusava qualquer setup quando o executável instalado não tinha um certificado Authenticode comercial confiável.
