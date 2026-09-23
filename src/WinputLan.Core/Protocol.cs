@@ -16,7 +16,9 @@ namespace WinputLan.Core
         Goodbye = 7,
         Error = 8,
         ReleaseAll = 9,
-        InputAck = 10
+        InputAck = 10,
+        // Controller tells the target whether mouse and keyboard are currently directed at it (payload: 1 byte).
+        ControlFocus = 11
     }
 
     public enum InputKind : byte

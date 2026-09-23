@@ -40,6 +40,7 @@ namespace WinputLan.Runtime
         {
             var wasActive = _remoteActive;
             _remoteActive = active;
+            if (wasActive != active && _transport.State == PeerConnectionState.Connected) _ = SendFocusAsync(active);
             if (!active)
             {
                 if (wasActive && _transport.State == PeerConnectionState.Connected) _ = SendReleaseAsync();
@@ -95,6 +96,12 @@ namespace WinputLan.Runtime
         {
             var releasing = _releaseSink as IFailSafeInputSink;
             if (releasing != null) releasing.ReleaseAll();
+        }
+
+        private async Task SendFocusAsync(bool focused)
+        {
+            try { await _transport.SendAsync(FrameType.ControlFocus, new[] { focused ? (byte)1 : (byte)0 }, _cts.Token).ConfigureAwait(false); }
+            catch { }
         }
 
         private async Task SendReleaseAsync()

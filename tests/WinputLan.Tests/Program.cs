@@ -35,6 +35,8 @@ namespace WinputLan.Tests
             Run("reconnect backoff bounds", TestBackoff);
             Run("automatic update schedule", TestUpdateSchedule);
             Run("elevated relaunch policy", TestElevationPolicy);
+            Run("machine list follows where input goes", TestMachineList);
+            Run("trusted peers match identity and certificate", TestTrustedPeers);
             Console.WriteLine("PASS={0} FAIL={1}", _passed, _failed);
             if (_failed != 0) Environment.ExitCode = 1;
         }
@@ -216,6 +218,44 @@ namespace WinputLan.Tests
             mask.Clear();
             Assert(mask.Value == "" && mask.Backspace(0) == 0, "clear empties every slot");
             Assert(AccessCode.IsValid(AccessCode.Normalize("k7m x9p")), "normalized typed code is valid");
+        }
+
+        private static void TestMachineList()
+        {
+            var controller = new MachineListInput { LocalName = "PC1", TargetName = "PC2", TargetAddress = "10.0.0.2", TargetRecognized = true, Outbound = OutboundSession.Connected, LocalHotkey = "Ctrl+Shift+Alt+1", RemoteHotkey = "Ctrl+Shift+Alt+2" };
+            var idle = MachineListState.Build(controller);
+            Assert(idle.Local.IsActive && !idle.Other.IsActive && idle.Local.IsController && !idle.Other.IsController, "connected but local: this PC is active and marked as controller");
+            Assert(idle.Other.Name == "PC2" && idle.Other.Badge == "Disponível" && idle.Local.Status == "Recebendo entrada", "target shows its real name and is available");
+            controller.OutboundFocused = true;
+            var sending = MachineListState.Build(controller);
+            Assert(!sending.Local.IsActive && sending.Other.IsActive && sending.Other.Badge == "Ativa" && sending.Local.Status == "Enviando entrada" && sending.Other.Status == "Recebendo entrada", "active state and green follow the machine receiving input");
+            Assert(sending.Local.IsController && sending.Local.Detail.Contains("Ctrl+Shift+Alt+1"), "controller keeps its badge and shows how to come back");
+            controller.Outbound = OutboundSession.None; controller.OutboundFocused = false;
+            var offline = MachineListState.Build(controller);
+            Assert(offline.Other.Visible && !offline.Local.IsController && offline.Other.Status == "Clique para conectar" && offline.Other.Subtitle == "Reconhecida", "known target offers approval-only reconnection");
+            controller.TargetRecognized = false;
+            Assert(MachineListState.Build(controller).Other.Subtitle == "Requer código", "unrecognized target needs a code");
+            var target = MachineListState.Build(new MachineListInput { LocalName = "PC2", InboundConnected = true, InboundFocused = true, ControllerName = "PC1" });
+            Assert(target.Local.IsActive && !target.Local.IsController && target.Other.IsController && !target.Other.IsActive && target.Other.Name == "PC1", "controlled PC shows the controller with its badge and itself as active");
+            var targetIdle = MachineListState.Build(new MachineListInput { LocalName = "PC2", InboundConnected = true, InboundFocused = false, ControllerName = "PC1" });
+            Assert(!targetIdle.Local.IsActive && targetIdle.Other.IsActive && targetIdle.Local.Status == "Aguardando controle", "when control returns, the controller row turns active");
+            var alone = MachineListState.Build(new MachineListInput { LocalName = "PC1" });
+            Assert(alone.Local.IsActive && !alone.Other.Visible && !alone.Local.IsController, "without sessions only this PC is shown");
+        }
+
+        private static void TestTrustedPeers()
+        {
+            var code = AccessCode.Generate();
+            var transcript = AccessProof.CanonicalTranscript("c", "t", "fc", "ft", new byte[32], Enumerable.Repeat((byte)1, 32).ToArray());
+            var key = TrustKey.Derive(code, transcript);
+            Assert(key.Length == TrustKey.Length && key.SequenceEqual(TrustKey.Derive(code, transcript)), "trust key is deterministic for the same pairing");
+            Assert(!key.SequenceEqual(TrustKey.Derive(code, AccessProof.CanonicalTranscript("c", "t", "fc", "other", new byte[32], Enumerable.Repeat((byte)1, 32).ToArray()))), "trust key is bound to the certificates");
+            var proof = TrustKey.Prove(key, transcript, "resume-request");
+            Assert(TrustKey.Verify(key, transcript, "resume-request", proof) && !TrustKey.Verify(key, transcript, "resume-accept", proof), "resume proofs are purpose-bound");
+            var peers = TrustedPeerList.Upsert(null, new TrustedPeer { DeviceId = "a", Fingerprint = "F1", ProtectedKey = new byte[1], CreatedUtcTicks = 1 });
+            peers = TrustedPeerList.Upsert(peers, new TrustedPeer { DeviceId = "a", Fingerprint = "F2", ProtectedKey = new byte[1], CreatedUtcTicks = 2 });
+            Assert(peers.Count == 1 && peers[0].Fingerprint == "F2", "re-pairing replaces the old record");
+            Assert(TrustedPeerList.Match(peers, "a", "f2") != null && TrustedPeerList.Match(peers, "a", "F1") == null && TrustedPeerList.Match(peers, "b", "F2") == null, "trust requires the same device and certificate");
         }
 
         private static void TestElevationPolicy()

@@ -24,6 +24,11 @@ namespace WinputLan.Core
         [DataMember(Order = 13)] public UpdateCheckFrequency UpdateCheckFrequency { get; set; }
         [DataMember(Order = 14)] public long LastUpdateCheckUtcTicks { get; set; }
         [DataMember(Order = 15)] public bool RunElevated { get; set; }
+        // Target this PC controls without a code while its identity and certificate are unchanged.
+        [DataMember(Order = 16)] public TrustedPeer TrustedTarget { get; set; }
+        // Controllers this PC recognises; cleared when the user intentionally renews the access code.
+        [DataMember(Order = 17)] public List<TrustedPeer> TrustedControllers { get; set; }
+        [DataMember(Order = 18)] public bool StartWithWindows { get; set; }
 
         public static WinputConfig CreateDefault()
         {

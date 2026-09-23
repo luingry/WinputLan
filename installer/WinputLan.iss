@@ -48,3 +48,6 @@ Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser; Check: WizardS
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Winput LAN (Private TCP)"" program=""{app}\WinputLan.exe"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveWinputLanFirewallRule"
+; "Iniciar com o Windows" entries (per-user Run value and the elevated logon task).
+Filename: "{sys}\reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v WinputLan /f"; Flags: runhidden; RunOnceId: "RemoveWinputLanRunValue"
+Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Winput LAN"" /F"; Flags: runhidden; RunOnceId: "RemoveWinputLanStartupTask"

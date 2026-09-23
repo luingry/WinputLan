@@ -54,6 +54,11 @@ namespace WinputLan
         private bool _isElevated;
         private bool _suppressElevationToggle;
         private DateTime _lastBlockedHintUtc = DateTime.MinValue;
+        private readonly DpapiSecretProtector _secretProtector = new DpapiSecretProtector();
+        private bool _inboundFocused;
+        private string _inboundControllerName;
+        private string _outboundNote;
+        private bool _suppressStartupToggle;
         private Forms.NotifyIcon _trayIcon;
         private readonly BackgroundLifecycle _backgroundLifecycle;
         private readonly InputLatencyWindow _latencyWindow = new InputLatencyWindow();
@@ -76,6 +81,7 @@ namespace WinputLan
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             _isElevated = ProcessElevation.IsCurrentElevated();
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
+            _suppressStartupToggle = true; StartWithWindowsCheckBox.IsChecked = _config.StartWithWindows; _suppressStartupToggle = false;
             VersionText.Text = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
@@ -118,11 +124,15 @@ namespace WinputLan
                 _listenerInputReceiver = new PairedInputReceiver(_listenerTransport, _inputSink);
                 _inputRouter.InputAudited += AuditInput;
                 _listenerInputReceiver.InputAudited += AuditInput;
+                _listenerInputReceiver.FocusChanged += focused => Dispatcher.BeginInvoke(new Action(() => { _inboundFocused = focused; RenderMachines(); }));
+                _listenerTransport.StateChanged += ListenerTransport_StateChanged;
+                _listenerPairingCoordinator.TrustLookup = LookupTrustedController;
+                _pairingCoordinator.TrustRejected += () => Dispatcher.BeginInvoke(new Action(OnTrustRejected));
                 _inputRouter.InputLatencyMeasured += latency =>
                 {
                     _latencyWindow.Record(latency);
                     double p50;
-                    if (_latencyWindow.TryGetP50(DateTime.UtcNow, TimeSpan.FromMilliseconds(250), out p50)) Dispatcher.BeginInvoke(new Action(() => LatencyText.Text = "Latência de entrada p50: " + Math.Round(p50) + " ms"));
+                    if (_latencyWindow.TryGetP50(DateTime.UtcNow, TimeSpan.FromMilliseconds(250), out p50)) Dispatcher.BeginInvoke(new Action(() => { if (_remoteActive) LatencyText.Text = "Latência p50: " + Math.Round(p50) + " ms"; }));
                 };
                 _accessCodeTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
                 _accessCodeTimer.Tick += (s, e) => _listenerPairingCoordinator?.RefreshExpiredAccessCode();
@@ -130,6 +140,9 @@ namespace WinputLan
                 CreateTrayIcon();
                 StartAutomaticUpdateChecks();
                 StartBlockedInputWatcher();
+                // Keeps the startup entry pointing at this executable and mode after updates or elevation changes.
+                if (_config.StartWithWindows) ApplyStartupRegistration(false);
+                RenderMachines();
                 AddLog("local", "local", "Hooks", "armed-controller-only");
             }
             catch (Exception ex)
@@ -182,12 +195,24 @@ namespace WinputLan
         private void MinimizeButton_Click(object sender, RoutedEventArgs e) { WindowState = WindowState.Minimized; }
         private void MaximizeButton_Click(object sender, RoutedEventArgs e) { WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; }
         private void CloseButton_Click(object sender, RoutedEventArgs e) { Close(); }
-        private void RemoteMachineRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) { SetInputTarget(true); }
+        private void RemoteMachineRow_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            // While another PC controls this one, the second row shows that controller and is informational.
+            if (_listenerTransport != null && _listenerTransport.State == PeerConnectionState.Connected && _transport.State != PeerConnectionState.Connected) return;
+            if (_transport.State == PeerConnectionState.Connected) { SetInputTarget(true); return; }
+            if (_transport.State == PeerConnectionState.Connecting || _transport.State == PeerConnectionState.Pairing) { CancelOutboundRequest("Pedido cancelado."); return; }
+            if (HasRecognizedTarget) { _ = ConnectRecognizedAsync(); return; }
+            BeginPairing();
+            var address = _config.TrustedTarget != null ? _config.TrustedTarget.Address : _config.RemoteAddress;
+            if (!string.IsNullOrWhiteSpace(address)) { RemoteAddressBox.Text = address; RemoteCodeBox.FocusFirstEmpty(); }
+        }
         private void RemoteCodeBox_Submitted(object sender, EventArgs e) { if (ConnectPairButton.IsEnabled) ConnectPairButton_Click(sender, new RoutedEventArgs()); }
         private async void ConnectPairButton_Click(object sender, RoutedEventArgs e)
         {
             var host = (RemoteAddressBox.Text ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(host)) { MessageBox.Show("Enter a peer address.", "Pairing", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            var recognized = _config.TrustedTarget;
+            if (RemoteCodeBox.Code.Length == 0 && HasRecognizedTarget && string.Equals(recognized.Address, host, StringComparison.OrdinalIgnoreCase)) { PairingOverlay.Visibility = Visibility.Collapsed; _ = ConnectRecognizedAsync(); return; }
             try { _pairingCoordinator.StartRequest(RemoteCodeBox.Code); }
             catch (Exception ex) { PairCodeStateText.Text = ex.Message; RemoteCodeBox.FocusFirstEmpty(); return; }
             _config.RemoteAddress = host;
@@ -252,6 +277,7 @@ namespace WinputLan
             if (!enable)
             {
                 if (_isElevated) MessageBox.Show("O Winput LAN volta a abrir sem privilégios de administrador na próxima vez que for iniciado.", "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Information);
+                if (_config.StartWithWindows) ApplyStartupRegistration(false);
                 return;
             }
             if (_isElevated) return;
@@ -318,31 +344,169 @@ namespace WinputLan
         private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); _logDirty = true; RefreshLog(); }
         private void AcceptPairButton_Click(object sender, RoutedEventArgs e) { try { _listenerPairingCoordinator.AcceptPending(); PairingOverlay.Visibility = Visibility.Collapsed; } catch (Exception ex) { MessageBox.Show(ex.Message, "Acesso", MessageBoxButton.OK, MessageBoxImage.Warning); } }
         private void DenyPairButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.DenyPending(); PairingOverlay.Visibility = Visibility.Collapsed; }
-        private void RenewAccessCodeButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.RenewAccessCode(); }
+        private void RenewAccessCodeButton_Click(object sender, RoutedEventArgs e)
+        {
+            var count = _config.TrustedControllers == null ? 0 : _config.TrustedControllers.Count;
+            if (count > 0 && MessageBox.Show("Renovar o código também faz este PC esquecer " + (count == 1 ? "a máquina reconhecida" : "as " + count + " máquinas reconhecidas") + ". Elas vão precisar do novo código para controlar este PC.\n\nContinuar?", "Renovar código", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            try { _listenerPairingCoordinator?.RenewAccessCode(); }
+            catch (InvalidOperationException ex) { MessageBox.Show(ex.Message, "Renovar código", MessageBoxButton.OK, MessageBoxImage.Information); return; }
+            _config.TrustedControllers = null;
+            try { _configStore.Save(_config); } catch { }
+            AddLog("local", "local", "Access", count > 0 ? "code-renewed-trust-cleared" : "code-renewed");
+        }
 
         private void BeginPairing()
         {
             PairingOverlay.Visibility = Visibility.Visible;
             ControllerPairPanel.Visibility = Visibility.Visible; TargetApprovalPanel.Visibility = Visibility.Collapsed;
             PairingTitleText.Text = "Controlar outra máquina"; PairingDescriptionText.Text = "Informe o IP e o código exibidos no PC que você quer controlar.";
-            PairCodeStateText.Text = "O PC controlado precisa aceitar o pedido."; RemoteCodeBox.Clear(); RemoteAddressBox.Focus(); AddLog("local", "remote", "Access", "ready");
+            PairCodeStateText.Text = HasRecognizedTarget ? "Para " + TargetDisplayName + " (reconhecida) deixe o código em branco: basta o aceite." : "O PC controlado precisa aceitar o pedido."; RemoteCodeBox.Clear(); RemoteAddressBox.Focus(); AddLog("local", "remote", "Access", "ready");
         }
 
-        private void RefreshKnownPeer()
+        private void RefreshKnownPeer() { RenderMachines(); }
+
+        private bool HasRecognizedTarget { get { var t = _config.TrustedTarget; return t != null && t.ProtectedKey != null && !string.IsNullOrWhiteSpace(t.Address) && !string.IsNullOrWhiteSpace(t.Fingerprint); } }
+        private string TargetDisplayName { get { var t = _config.TrustedTarget; return t != null && !string.IsNullOrWhiteSpace(t.DisplayName) ? t.DisplayName : "a máquina vinculada"; } }
+
+        // Single place that turns session state into the two machine rows and the shortcut labels.
+        private void RenderMachines()
         {
-            var hasPeer = !string.IsNullOrWhiteSpace(_config.PinnedDeviceId) && !string.IsNullOrWhiteSpace(_config.PinnedFingerprint);
-            RemoteMachineRow.Visibility = hasPeer ? Visibility.Visible : Visibility.Collapsed;
-            NoPeersState.Visibility = hasPeer ? Visibility.Collapsed : Visibility.Visible;
-            RemoteShortcutTargetText.Text = hasPeer ? "Máquina vinculada" : "Nenhuma máquina";
-            RemoteShortcutBadge.Visibility = hasPeer ? Visibility.Visible : Visibility.Collapsed;
-            if (hasPeer)
+            var target = _config.TrustedTarget;
+            var legacyPeer = target == null && !string.IsNullOrWhiteSpace(_config.PinnedDeviceId);
+            var state = _transport.State;
+            var outbound = state == PeerConnectionState.Connected ? OutboundSession.Connected : state == PeerConnectionState.Pairing ? OutboundSession.AwaitingApproval : state == PeerConnectionState.Connecting ? OutboundSession.Connecting : OutboundSession.None;
+            var inbound = _listenerTransport != null && _listenerTransport.State == PeerConnectionState.Connected;
+            var model = MachineListState.Build(new MachineListInput
             {
-                RemoteAddressText.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "Endereço da rede local" : _config.RemoteAddress;
-                RemoteNameText.Text = "Máquina vinculada";
-                RemoteStateText.Text = "Pronto para enviar entrada";
-                RemoteBadgeText.Text = "Disponível";
-                LatencyText.Text = "Aguardando atalho";
+                LocalName = _config.DisplayName, LocalHotkey = _config.LocalHotkey, RemoteHotkey = _config.RemoteHotkey,
+                Outbound = outbound, OutboundFocused = _remoteActive,
+                TargetName = target != null ? target.DisplayName : legacyPeer ? "Máquina vinculada" : null,
+                TargetAddress = target != null ? target.Address : _config.RemoteAddress,
+                TargetRecognized = HasRecognizedTarget,
+                InboundConnected = inbound, InboundFocused = _inboundFocused,
+                ControllerName = _inboundControllerName, ControllerAddress = HostOnly(_listenerTransport == null ? null : _listenerTransport.RemoteEndpoint)
+            });
+            ApplyRow(model.Local, LocalMachineRow, LocalRowAccent, LocalStatusBadge, LocalDot, LocalBadgeText, LocalControllerBadge, LocalNameText, null, LocalSubtitleText, LocalStateText, LocalDetailText);
+            ApplyRow(model.Other, RemoteMachineRow, RemoteRowAccent, RemoteStatusBadge, RemoteDot, RemoteBadgeText, RemoteControllerBadge, RemoteNameText, RemoteAddressText, RemoteStateText, TargetStateText, LatencyText);
+            if (model.Other.Visible && !inbound && outbound == OutboundSession.None && !string.IsNullOrWhiteSpace(_outboundNote)) LatencyText.Text = _outboundNote;
+            RemoteMachineRow.ToolTip = inbound ? null : outbound == OutboundSession.None ? (HasRecognizedTarget ? "Clique para pedir controle (só precisa do aceite)" : "Clique para vincular com o código") : outbound == OutboundSession.Connected ? "Clique para enviar mouse e teclado" : "Clique para cancelar o pedido";
+            NoPeersState.Visibility = model.Other.Visible ? Visibility.Collapsed : Visibility.Visible;
+            var hasTarget = target != null || legacyPeer;
+            RemoteShortcutTargetText.Text = hasTarget ? (target != null && !string.IsNullOrWhiteSpace(target.DisplayName) ? target.DisplayName : "Máquina vinculada") : "Nenhuma máquina";
+            RemoteShortcutBadge.Visibility = hasTarget ? Visibility.Visible : Visibility.Collapsed;
+            RemoteShortcutStatusText.Text = _remoteActive ? "Ativo" : "Configurado";
+            LocalShortcutTargetText.Text = string.IsNullOrWhiteSpace(_config.DisplayName) ? "Este computador" : _config.DisplayName + " (este PC)";
+        }
+
+        private void ApplyRow(MachineRowModel row, Grid grid, System.Windows.Shapes.Rectangle accent, Border badge, System.Windows.Shapes.Ellipse dot, TextBlock badgeText, Border controllerBadge, TextBlock name, TextBlock address, TextBlock subtitle, TextBlock status, TextBlock detail)
+        {
+            grid.Visibility = row.Visible ? Visibility.Visible : Visibility.Collapsed;
+            if (!row.Visible) return;
+            grid.Background = new SolidColorBrush(row.IsActive ? Color.FromRgb(0x1B, 0x2A, 0x28) : Color.FromRgb(0x18, 0x20, 0x25));
+            accent.Visibility = row.IsActive ? Visibility.Visible : Visibility.Collapsed;
+            badge.Background = new SolidColorBrush(row.IsActive ? Color.FromRgb(0x23, 0x4B, 0x31) : Color.FromRgb(0x29, 0x34, 0x3D));
+            dot.Fill = row.IsActive ? (Brush)FindResource("AccentBrush") : new SolidColorBrush(Color.FromRgb(0xAF, 0xC9, 0xE3));
+            badgeText.Foreground = row.IsActive ? (Brush)FindResource("AccentStrongBrush") : new SolidColorBrush(Color.FromRgb(0xC7, 0xD8, 0xE8));
+            badgeText.Text = row.Badge;
+            controllerBadge.Visibility = row.IsController ? Visibility.Visible : Visibility.Collapsed;
+            name.Text = row.Name;
+            if (address != null) address.Text = row.Address;
+            subtitle.Text = row.Subtitle;
+            status.Text = row.Status;
+            detail.Text = row.Detail;
+        }
+
+        private static string HostOnly(string endpoint)
+        {
+            if (string.IsNullOrWhiteSpace(endpoint)) return null;
+            var colon = endpoint.LastIndexOf(':');
+            return (colon > 0 ? endpoint.Substring(0, colon) : endpoint).Trim('[', ']');
+        }
+
+        private byte[] LookupTrustedController(string deviceId, string fingerprint)
+        {
+            var peer = TrustedPeerList.Match(_config.TrustedControllers, deviceId, fingerprint);
+            if (peer == null) return null;
+            try { return _secretProtector.Unprotect(peer.ProtectedKey); } catch { return null; }
+        }
+
+        // Reconnects to the recognised target: it proves the stored trust key and only asks for a click there.
+        private async Task ConnectRecognizedAsync()
+        {
+            var target = _config.TrustedTarget;
+            if (!HasRecognizedTarget || _transport.State == PeerConnectionState.Connecting || _transport.State == PeerConnectionState.Pairing || _transport.State == PeerConnectionState.Connected) return;
+            byte[] key;
+            try { key = _secretProtector.Unprotect(target.ProtectedKey); } catch { OnTrustRejected(); return; }
+            try { _pairingCoordinator.StartResume(key, target.DeviceId, target.Fingerprint); } catch (Exception ex) { _outboundNote = ex.Message; RenderMachines(); return; }
+            _config.RemoteAddress = target.Address; _outboundNote = null;
+            _outboundRequestCts?.Cancel(); var requestCts = new CancellationTokenSource(); _outboundRequestCts = requestCts;
+            AddLog("local", "remote", "Access", "resume-requested"); RenderMachines();
+            try
+            {
+                var port = _config.RemotePort <= 0 ? _config.ListenPort : _config.RemotePort;
+                await _transport.ConnectAsync(target.Address, port, _certificate, null, true, requestCts.Token);
+                if (OwnsOutboundRequest(requestCts) && requestCts.IsCancellationRequested) _transport.Disconnect("access request cancelled");
             }
+            catch (Exception ex)
+            {
+                if (!OwnsOutboundRequest(requestCts)) return;
+                _outboundNote = ex is OperationCanceledException ? "Pedido cancelado." : TargetDisplayName + " não respondeu. Verifique se o Winput LAN está aberto nela.";
+                AddLog("local", "remote", "Transport", "failed"); RenderMachines();
+            }
+        }
+
+        private void CancelOutboundRequest(string note)
+        {
+            _outboundRequestCts?.Cancel(); _pairingCoordinator?.CancelRequest(); _transport.Disconnect("access request cancelled");
+            _outboundNote = note; RenderMachines();
+        }
+
+        // The target renewed its code or one side's identity changed: forget the key and fall back to the code.
+        private void OnTrustRejected()
+        {
+            if (_config.TrustedTarget != null) { _config.TrustedTarget.ProtectedKey = null; try { _configStore.Save(_config); } catch { } }
+            AddLog("remote", "local", "Access", "trust-rejected");
+            BeginPairing();
+            var address = _config.TrustedTarget != null ? _config.TrustedTarget.Address : _config.RemoteAddress;
+            if (!string.IsNullOrWhiteSpace(address)) RemoteAddressBox.Text = address;
+            PairCodeStateText.Text = TargetDisplayName + " não reconhece mais este PC. Informe o código atual dela.";
+            ConnectPairButton.IsEnabled = true; RemoteCodeBox.FocusFirstEmpty();
+            RenderMachines();
+        }
+
+        private void ListenerTransport_StateChanged(PeerConnectionState state, string detail)
+        {
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (state != PeerConnectionState.Connected) _inboundFocused = false;
+                RenderMachines();
+            }));
+        }
+
+        // Called instead of Show() when started with Windows: builds the window handle (hooks, listener, tray) hidden.
+        public void StartInTray()
+        {
+            new WindowInteropHelper(this).EnsureHandle();
+            CreateTrayIcon();
+            _trayIcon.Visible = true;
+        }
+
+        private void StartWithWindowsCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressStartupToggle) return;
+            _config.StartWithWindows = StartWithWindowsCheckBox.IsChecked == true;
+            try { _configStore.Save(_config); } catch { }
+            ApplyStartupRegistration(true);
+        }
+
+        private void ApplyStartupRegistration(bool reportErrors)
+        {
+            var enabled = _config.StartWithWindows; var elevatedMode = _config.RunElevated && _isElevated;
+            Task.Run(() =>
+            {
+                try { StartupRegistration.Apply(enabled, elevatedMode); AddLog("local", "local", "Startup", enabled ? (elevatedMode ? "task" : "run-key") : "off"); }
+                catch (Exception ex) { AddLog("local", "local", "Startup", "failed"); if (reportErrors) Dispatcher.BeginInvoke(new Action(() => MessageBox.Show("Não foi possível configurar a inicialização com o Windows.\n\n" + ex.Message, "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning))); }
+            });
         }
 
         private void ConfigureMachineRows()
@@ -384,6 +548,7 @@ namespace WinputLan
             coordinator.PairingFailed += reason => Dispatcher.BeginInvoke(new Action(() =>
             {
                 PairCodeStateText.Text = "Pedido encerrado: " + reason;
+                if (ReferenceEquals(coordinator, _pairingCoordinator) && PairingOverlay.Visibility != Visibility.Visible) { _outboundNote = reason; RenderMachines(); }
                 ConnectPairButton.IsEnabled = true;
                 AddLog("remote", "local", "Access", "failed");
             }));
@@ -400,14 +565,21 @@ namespace WinputLan
                     _config.PinnedSecret = _pinStore.ExportProtectedBlob();
                     _config.PinnedDeviceId = record.DeviceId;
                     _config.PinnedFingerprint = record.CertificateFingerprint;
-                    _configStore.Save(_config);
+                    var previousName = _config.TrustedTarget != null ? _config.TrustedTarget.DisplayName : null;
+                    _config.TrustedTarget = new TrustedPeer { DeviceId = record.DeviceId, Fingerprint = record.CertificateFingerprint, DisplayName = string.IsNullOrWhiteSpace(record.DisplayName) ? previousName : record.DisplayName, Address = _config.RemoteAddress, ProtectedKey = record.TrustKey == null ? null : _secretProtector.Protect(record.TrustKey), CreatedUtcTicks = DateTime.UtcNow.Ticks };
+                    _outboundNote = null;
                 }
+                else
+                {
+                    _inboundControllerName = record.DisplayName; _inboundFocused = false;
+                    if (record.TrustKey != null) _config.TrustedControllers = TrustedPeerList.Upsert(_config.TrustedControllers, new TrustedPeer { DeviceId = record.DeviceId, Fingerprint = record.CertificateFingerprint, DisplayName = record.DisplayName, Address = HostOnly(_listenerTransport.RemoteEndpoint), ProtectedKey = _secretProtector.Protect(record.TrustKey), CreatedUtcTicks = DateTime.UtcNow.Ticks });
+                }
+                _configStore.Save(_config);
                 PairCodeStateText.Text = outbound ? "Acesso aceito. Controle pronto." : "Acesso autorizado.";
                 PairingOverlay.Visibility = Visibility.Collapsed;
-                if (outbound) RefreshKnownPeer();
+                RenderMachines();
                 AddLog("local", "remote", "Access", outbound ? "controller-ready" : "target-ready");
                 if (outbound) EnsureControllerCapture();
-                // A new remote-control session always requires a fresh target code and approval.
             }
             catch { AddLog("local", "remote", "Pairing", "pin-save-failed"); }
         }
@@ -463,17 +635,15 @@ namespace WinputLan
         {
             if (remote && (_transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend))
             {
+                // The shortcut on a disconnected but recognised target starts a reconnection request.
+                if (HasRecognizedTarget && _transport.State != PeerConnectionState.Connecting && _transport.State != PeerConnectionState.Pairing) _ = ConnectRecognizedAsync();
                 AddLog("local", "remote", "Target", "blocked-unpaired");
                 return;
             }
             _remoteActive = remote;
             _inputRouter?.SetRemoteActive(remote);
             _capture?.SetRemoteActive(remote);
-            RemoteDot.Fill = remote ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("MutedBrush");
-            TargetStateText.Text = remote ? "Enviando entrada" : "Aguardando atalho";
-            RemoteStateText.Text = remote ? "Enviando entrada para máquina" : "Pronto para enviar entrada";
-            RemoteBadgeText.Text = remote ? "Ativa" : "Disponível";
-            RemoteShortcutStatusText.Text = remote ? "Ativo" : "Configurado";
+            RenderMachines();
             AddLog("local", remote ? "remote" : "local", "Target", remote ? "selected" : "restored");
         }
 
@@ -483,8 +653,8 @@ namespace WinputLan
             {
                 // A lost session must hand the pinned cursor and keyboard back to this machine immediately.
                 if (state != PeerConnectionState.Connected && _remoteActive) SetInputTarget(false);
-                if (state == PeerConnectionState.Connected) { RemoteNameText.Text = "Máquina vinculada"; RemoteAddressText.Text = _config.RemoteAddress ?? "Rede local"; LatencyText.Text = "Conectada agora"; RemoteStateText.Text = "Pronto para enviar entrada"; }
-                else if (state == PeerConnectionState.Offline) { _capture?.Dispose(); _capture = null; LatencyText.Text = "Última conexão indisponível"; RemoteStateText.Text = "Não está acessível agora"; RemoteBadgeText.Text = "Offline"; }
+                if (state == PeerConnectionState.Offline || state == PeerConnectionState.Faulted) { _capture?.Dispose(); _capture = null; }
+                RenderMachines();
                 AddLog("remote", "local", "Transport", state.ToString());
             });
         }
@@ -515,7 +685,10 @@ namespace WinputLan
             PairingOverlay.Visibility = Visibility.Visible;
             ControllerPairPanel.Visibility = Visibility.Collapsed; TargetApprovalPanel.Visibility = Visibility.Visible;
             PairingTitleText.Text = "Permitir controle?";
-            PairingDescriptionText.Text = "O código foi validado. Você decide se esta sessão pode começar.";
+            PairingDescriptionText.Text = request.Recognized ? "Máquina reconhecida de um vínculo anterior. Você decide se esta sessão pode começar." : "O código foi validado. Você decide se esta sessão pode começar.";
+            // The request must be seen even when the app lives in the notification area.
+            if (!IsVisible || WindowState == WindowState.Minimized) RestoreFromTray();
+            Activate(); Topmost = true; Topmost = false;
             RequestingMachineText.Text = string.IsNullOrWhiteSpace(request.DisplayName) ? "Máquina solicitante" : request.DisplayName;
             RequestingAddressText.Text = "IP solicitante: " + (_listenerTransport.RemoteEndpoint ?? "rede local");
             AcceptPairButton.Focus(); AddLog("remote", "local", "Access", "approval-requested");

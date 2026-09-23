@@ -10,6 +10,10 @@ Controle mouse e teclado de um PC Windows para outro na mesma rede local.
 4. No controlador, use **Controlar outra máquina**, informe IP e código.
 5. O PC controlado aceita ou nega o pedido. A sessão aceita envia entrada em uma única direção.
 
+Depois do primeiro vínculo, as máquinas se reconhecem: basta clicar na máquina (ou usar o atalho) e aceitar no outro PC, sem código. O código volta a ser pedido se o PC controlado clicar em **Renovar código** ou se a identidade de uma das máquinas mudar.
+
+Marque **Iniciar com o Windows** para o app abrir minimizado na área de notificação ao entrar no Windows.
+
 O Windows bloqueia controle remoto em janelas de administrador (ex.: Gerenciador de Tarefas). Para controlá-las, marque **Permitir controlar apps de administrador** no PC controlado. Avisos de segurança do UAC só aceitam mouse e teclado físicos.
 
 O instalador cria uma regra de firewall apenas para a rede Privada. O programa pode continuar na área de notificação ao minimizar ou fechar, se essa opção estiver habilitada.

@@ -21,11 +21,11 @@ namespace WinputLan.Runtime
         }
 
         // Starts an elevated copy. Returns false when the user declined the UAC prompt.
-        public static bool TryRelaunchElevated()
+        public static bool TryRelaunchElevated(bool startup = false)
         {
             try
             {
-                Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, ElevationPolicy.RelaunchedArgument) { UseShellExecute = true, Verb = "runas" });
+                Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, ElevationPolicy.RelaunchedArgument + (startup ? " " + StartupRegistration.StartupArgument : string.Empty)) { UseShellExecute = true, Verb = "runas" });
                 return true;
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled) { return false; }

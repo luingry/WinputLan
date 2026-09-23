@@ -58,3 +58,28 @@ against a test-only 2ms polling drain under the same TLS/ACK load. `WriteAsync`
 is not followed by a redundant flush, but no latency causality is claimed for
 that removal. Failed TLS, code, framing, sequence, or
 direction checks close the transport and release remote input state.
+
+
+## Recognized machines (resume)
+
+A completed code pairing also derives a 32-byte trust key on both sides:
+`HKDF-SHA256(code, SHA-256(transcript), "winput-lan/trust/v1")`. The controller stores it
+with the target's device id, certificate fingerprint and name; the target stores it per
+controller. Both are DPAPI-protected. The `challenge` frame now carries the target's
+base64 display name as a fourth field.
+
+To reconnect, the controller sends `PairingOffer` `resume|controllerDeviceId|base64(name)|nonce`.
+The target answers only if that device id and the observed TLS fingerprint match a
+trusted record; otherwise it sends `Error` `untrusted` and the controller falls back to
+the code. The controller also refuses to prove anything to a target whose device id or
+fingerprint differs from its record. Proofs are `HMAC-SHA256(trustKey, "winput-lan/resume/v1\n" + purpose + "\n" + transcript)`
+over a fresh transcript (new nonces, both fingerprints), with purposes `resume-request`
+and `resume-accept`. The target still requires an explicit accept, and a resume does not
+consume the visible access code. Renewing the code on the target forgets every trusted
+controller.
+
+## Control focus
+
+`ControlFocus` (11) carries one byte: 1 when the controller starts directing mouse and
+keyboard to the target, 0 when it takes them back. The target uses it only to show which
+machine is receiving input.

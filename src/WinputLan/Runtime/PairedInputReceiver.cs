@@ -23,6 +23,8 @@ namespace WinputLan.Runtime
         }
 
         public event Action<InputKind, string> InputAudited;
+        // Whether the controller currently directs its mouse and keyboard at this PC.
+        public event Action<bool> FocusChanged;
 
         public void Dispose()
         {
@@ -38,6 +40,11 @@ namespace WinputLan.Runtime
             if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll))
             {
                 InputAudited?.Invoke(InputKind.KeyDown, "dropped-direction");
+                return;
+            }
+            if (frame.Type == FrameType.ControlFocus)
+            {
+                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1) FocusChanged?.Invoke(frame.Payload[0] == 1);
                 return;
             }
             if (frame.Type == FrameType.ReleaseAll)
@@ -67,7 +74,7 @@ namespace WinputLan.Runtime
 
         private void Transport_StateChanged(PeerConnectionState state, string detail)
         {
-            if (state != PeerConnectionState.Connected) ReleaseAll();
+            if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
         }
 
         private void ReleaseAll()

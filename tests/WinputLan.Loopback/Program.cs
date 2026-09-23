@@ -41,6 +41,8 @@ namespace WinputLan.Loopback
                     // A second accepted session proves that a closed session releases the target for a fresh request.
                     await ValidCodeAcceptedOneWayAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
                     await VerifyHeartbeatFailSafeAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
+                    await RecognizedMachineResumesWithApprovalOnlyAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
+                    Console.WriteLine("RESUME PASS: shared trust key, names exchanged, recognized request needs only approval; untrusted, wrong key and changed certificate fall back to code");
                     Console.WriteLine("LOOPBACK PASS: invalid code hidden, deny recoverable, accept one-way, reconnect and <=50ms local ACK p95");
                 }
                 finally { try { Directory.Delete(root, true); } catch { } }
@@ -95,7 +97,7 @@ namespace WinputLan.Loopback
                 var name = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes("controller"));
                 await controller.SendAsync(FrameType.PairingOffer, System.Text.Encoding.UTF8.GetBytes("offer|" + controllerConfig.DeviceId + "|" + name + "|" + Convert.ToBase64String(controllerNonce)), token).ConfigureAwait(false);
                 var parts = (await WaitResultAsync(challenge.Task, token, "target challenge missing").ConfigureAwait(false)).Split('|');
-                if (parts.Length != 3 || parts[0] != "challenge") throw new InvalidOperationException("Target emitted malformed challenge.");
+                if (parts.Length != 4 || parts[0] != "challenge") throw new InvalidOperationException("Target emitted malformed challenge.");
                 var targetNonce = Convert.FromBase64String(parts[2]);
                 var substitutedTranscript = AccessProof.CanonicalTranscript(controllerConfig.DeviceId, targetConfig.DeviceId, CertificateManager.Fingerprint(controllerCert), "mitm-substituted-target-fingerprint", controllerNonce, targetNonce);
                 var proof = AccessProof.Create(targetPairing.AccessCode, substitutedTranscript, "request");
@@ -212,6 +214,71 @@ namespace WinputLan.Loopback
                     }
                 }
             }
+        }
+
+        private sealed class SessionResult { public PinRecord Controller; public PinRecord Target; public AccessRequest Request; public bool Rejected; public bool Prompted; }
+
+        // Runs one request end to end. resume == null uses the target's current code; otherwise the given trust key.
+        private static async Task<SessionResult> RunSessionAsync(WinputConfig targetConfig, WinputConfig controllerConfig, X509Certificate2 targetCert, X509Certificate2 controllerCert, Func<string, string, byte[]> lookup, byte[] resumeKey, string expectedTargetFingerprint, bool expectPrompt, CancellationToken token)
+        {
+            var port = FindPort(); targetConfig.ListenPort = port;
+            var result = new SessionResult();
+            using (var target = new PeerTransport()) using (var controller = new PeerTransport())
+            using (var targetPairing = new PairingCoordinator(target, targetConfig, targetCert, PairingRole.Target))
+            using (var controllerPairing = new PairingCoordinator(controller, controllerConfig, controllerCert, PairingRole.Controller))
+            {
+                targetPairing.TrustLookup = lookup;
+                var prompt = new TaskCompletionSource<AccessRequest>(); var controllerDone = new TaskCompletionSource<PinRecord>(); var targetDone = new TaskCompletionSource<PinRecord>(); var ended = new TaskCompletionSource<bool>();
+                targetPairing.AccessRequestReceived += r => prompt.TrySetResult(r);
+                controllerPairing.PairingCompleted += r => controllerDone.TrySetResult(r);
+                targetPairing.PairingCompleted += r => targetDone.TrySetResult(r);
+                controllerPairing.TrustRejected += () => result.Rejected = true;
+                controllerPairing.PairingFailed += _ => ended.TrySetResult(true);
+                var codeBefore = targetPairing.AccessCode;
+                var listen = target.ListenOnceAsync(port, targetCert, null, true, token); await Task.Delay(50, token).ConfigureAwait(false);
+                if (resumeKey == null) controllerPairing.StartRequest(targetPairing.AccessCode);
+                else controllerPairing.StartResume(resumeKey, targetConfig.DeviceId, expectedTargetFingerprint);
+                await controller.ConnectAsync("127.0.0.1", port, controllerCert, null, true, token).ConfigureAwait(false);
+                if (!expectPrompt)
+                {
+                    await WaitAsync(ended.Task, token, "rejected request did not end").ConfigureAwait(false);
+                    result.Prompted = prompt.Task.IsCompleted;
+                    controller.Disconnect("loopback complete"); target.Disconnect("loopback complete"); try { await listen.ConfigureAwait(false); } catch { }
+                    return result;
+                }
+                result.Request = await WaitResultAsync(prompt.Task, token, "target prompt missing").ConfigureAwait(false); result.Prompted = true;
+                targetPairing.AcceptPending();
+                result.Controller = await WaitResultAsync(controllerDone.Task, token, "controller acceptance missing").ConfigureAwait(false);
+                result.Target = await WaitResultAsync(targetDone.Task, token, "target completion missing").ConfigureAwait(false);
+                if (resumeKey != null && targetPairing.AccessCode != codeBefore) throw new InvalidOperationException("A recognized reconnection consumed the visible access code.");
+                controller.Disconnect("loopback complete"); await listen.ConfigureAwait(false);
+            }
+            return result;
+        }
+
+        private static async Task RecognizedMachineResumesWithApprovalOnlyAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert, CancellationToken token)
+        {
+            var targetConfig = Config("PC-Sala", 0); var controllerConfig = Config("PC-Escritorio", 0);
+            var targetFingerprint = CertificateManager.Fingerprint(targetCert); var controllerFingerprint = CertificateManager.Fingerprint(controllerCert);
+            var first = await RunSessionAsync(targetConfig, controllerConfig, targetCert, controllerCert, null, null, null, true, token).ConfigureAwait(false);
+            if (first.Controller.TrustKey == null || first.Target.TrustKey == null || !first.Controller.TrustKey.SequenceEqual(first.Target.TrustKey)) throw new InvalidOperationException("Code pairing did not derive one shared trust key.");
+            if (first.Controller.DisplayName != "PC-Sala" || first.Target.DisplayName != "PC-Escritorio") throw new InvalidOperationException("Machine names were not exchanged.");
+            if (first.Request.Recognized || first.Controller.Recognized) throw new InvalidOperationException("A code pairing was reported as recognized.");
+            var key = first.Controller.TrustKey;
+            Func<string, string, byte[]> trusted = (id, fp) => id == controllerConfig.DeviceId && string.Equals(fp, controllerFingerprint, StringComparison.OrdinalIgnoreCase) ? first.Target.TrustKey : null;
+
+            var resumed = await RunSessionAsync(targetConfig, controllerConfig, targetCert, controllerCert, trusted, key, targetFingerprint, true, token).ConfigureAwait(false);
+            if (!resumed.Request.Recognized || !resumed.Controller.Recognized || !resumed.Target.Recognized) throw new InvalidOperationException("Recognized reconnection was not marked as recognized.");
+
+            var untrusted = await RunSessionAsync(targetConfig, controllerConfig, targetCert, controllerCert, (id, fp) => null, key, targetFingerprint, false, token).ConfigureAwait(false);
+            if (untrusted.Prompted || !untrusted.Rejected) throw new InvalidOperationException("A forgotten controller was prompted instead of asked for the code.");
+
+            var wrongKey = Enumerable.Repeat((byte)7, TrustKey.Length).ToArray();
+            var forged = await RunSessionAsync(targetConfig, controllerConfig, targetCert, controllerCert, trusted, wrongKey, targetFingerprint, false, token).ConfigureAwait(false);
+            if (forged.Prompted || !forged.Rejected) throw new InvalidOperationException("A wrong trust key reached the approval prompt.");
+
+            var changed = await RunSessionAsync(targetConfig, controllerConfig, targetCert, controllerCert, trusted, key, "certificate-of-another-machine", false, token).ConfigureAwait(false);
+            if (changed.Prompted || !changed.Rejected) throw new InvalidOperationException("A changed target certificate did not fall back to the code.");
         }
 
         private static async Task<double[]> MeasureLegacyPollingAsync(PeerTransport controller, List<double> latencies, CancellationToken token)

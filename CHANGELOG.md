@@ -5,6 +5,19 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-23
+
+### Added
+
+- Recognized machines: after one code pairing, the controller reconnects with only an approval click on the other PC. The code is required again when the controlled PC renews its code, or when either machine's identity or certificate changes.
+- "Iniciar com o Windows": starts minimized in the notification area (elevated logon task when admin mode is on, so no UAC prompt at sign-in).
+- Machine list shows real machine names, a "Controladora" badge on the controlling PC, and moves the green "Ativa" state to whichever machine is receiving input, on both PCs.
+
+### Changed
+
+- Updates button uses the Windows "Sync" system icon.
+- The approval prompt brings the window forward even when the app is in the notification area.
+
 ## [0.2.5] - 2026-09-23
 
 ### Fixed

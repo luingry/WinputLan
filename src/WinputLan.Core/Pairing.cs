@@ -151,6 +151,10 @@ namespace WinputLan.Core
         public string CertificateFingerprint { get; set; }
         public string TranscriptDigest { get; set; }
         public DateTime CreatedUtc { get; set; }
+        // Not persisted by PinStore: callers store these in the DPAPI-protected trust records.
+        public string DisplayName { get; set; }
+        public byte[] TrustKey { get; set; }
+        public bool Recognized { get; set; }
     }
 
     public sealed class PinStore
