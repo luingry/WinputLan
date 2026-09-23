@@ -33,6 +33,13 @@ namespace WinputLan.Core
             if (value == null) throw new ArgumentNullException("value");
             lock (_gate)
             {
+                if (value.Kind == InputKind.MouseDelta && _items.Last != null && _items.Last.Value.Kind == InputKind.MouseDelta)
+                {
+                    // Relative motion must never be dropped: merge into the unsent tail instead.
+                    var tail = _items.Last.Value;
+                    _items.Last.Value = InputEvent.MouseDelta(tail.X + value.X, tail.Y + value.Y, tail.TimestampUtcTicks);
+                    return EnqueueResult.CoalescedMouseMove;
+                }
                 if (value.Kind == InputKind.MouseMove)
                 {
                     if (_items.Last != null && _items.Last.Value.Kind == InputKind.MouseMove)

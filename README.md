@@ -18,6 +18,8 @@ O pareamento exige código e aceite local. A comunicação é TLS na LAN; não h
 
 Cada atualização OTA baixa um manifesto HTTPS do GitHub, valida uma assinatura RSA fixada no aplicativo, exige versão mais nova e confere o SHA-256 do instalador. A assinatura do manifesto protege a atualização mesmo quando o setup não possui certificado comercial. O Windows SmartScreen ainda pode avisar sobre um instalador sem Authenticode.
 
+O app procura atualizações sozinho (diariamente, semanalmente ou nunca — ajustável na tela principal), mostra o progresso do download, instala em silêncio e reabre ao final.
+
 ## Build e release
 
 ```powershell

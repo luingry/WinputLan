@@ -16,8 +16,11 @@ Types are `Hello`, `PairingOffer`, `PairingConfirm`, `Input`, `Heartbeat`,
 
 The fixed input record is 32 bytes: kind, reserved byte, flags, X, Y,
 mouse-data, virtual key, scan code, UTC ticks, and a reserved uint. Keyboard
-down/up and mouse button down/up are never coalesced. Only a tail mouse move
-may be replaced by a newer move.
+down/up and mouse button down/up are never coalesced. While remote control is
+active the controller pins its own cursor and sends `MouseDelta` (kind 7, X/Y are
+pixel deltas); consecutive unsent deltas are summed, never dropped. The target
+adds them to a tracked cursor and injects an exact absolute position in physical
+pixels. Legacy absolute `MouseMove` (kind 1) is still accepted.
 
 The controlled machine generates and displays a 16-character, unambiguous
 Base32 CSPRNG access code (80 bits), formatted `XXXX XXXX XXXX XXXX`, below its
@@ -44,8 +47,9 @@ pending request cancels the target prompt without permitting a late acceptance.
 
 After approval the controller transport is send-only for `Input` and the target
 is receive-only. Forbidden input frames are rejected before injection. Every
-accepted input is answered by `InputAck` carrying its original UTC ticks for
-lightweight latency telemetry. The benchmark compares its signal-driven drain
+accepted key, button and wheel input is answered by `InputAck` carrying its
+original UTC ticks for lightweight latency telemetry; motion is sampled at most
+once per 100 ms. The benchmark compares its signal-driven drain
 against a test-only 2ms polling drain under the same TLS/ACK load. `WriteAsync`
 is not followed by a redundant flush, but no latency causality is claimed for
 that removal. Failed TLS, code, framing, sequence, or

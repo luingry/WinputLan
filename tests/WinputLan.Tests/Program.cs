@@ -24,7 +24,7 @@ namespace WinputLan.Tests
             Run("LAN IPv4 selection prefers routed Ethernet/Wi-Fi", TestLanAddressSelection);
             Run("rolling latency window is p50 and throttled", TestLatencyWindow);
             Run("input audit filters duplicates and throttles high frequency", TestInputAuditPolicy);
-            Run("mouse capture suppression preserves local cursor movement", TestInputCapturePolicy);
+            Run("input routing keeps press/release pairs on one machine", TestInputRouting);
             Run("outbound cancellation cannot update a newer attempt", TestRequestAttemptOwnership);
             Run("hotkey validation", TestHotkeys);
             Run("hotkey hook bypass", TestHotkeyBypass);
@@ -33,6 +33,7 @@ namespace WinputLan.Tests
             Run("configuration corruption validation", TestConfig);
             Run("signed release manifest invariants", TestManifest);
             Run("reconnect backoff bounds", TestBackoff);
+            Run("automatic update schedule", TestUpdateSchedule);
             Console.WriteLine("PASS={0} FAIL={1}", _passed, _failed);
             if (_failed != 0) Environment.ExitCode = 1;
         }
@@ -121,6 +122,14 @@ namespace WinputLan.Tests
             Assert(queue.TryDequeue(out value) && value.Kind == InputKind.KeyDown, "key order");
             Assert(queue.TryDequeue(out value) && value.Kind == InputKind.MouseMove && value.X == 2, "latest move");
             Assert(queue.TryDequeue(out value) && value.Kind == InputKind.MouseButtonDown, "button order");
+            queue.Enqueue(InputEvent.MouseDelta(3, -1, 5));
+            Assert(queue.Enqueue(InputEvent.MouseDelta(4, 2, 6)) == EnqueueResult.CoalescedMouseMove, "deltas coalesce");
+            queue.Enqueue(InputEvent.MouseButton(InputKind.MouseButtonDown, 0x0201, 7));
+            queue.Enqueue(InputEvent.MouseDelta(1, 1, 8));
+            Assert(queue.TryDequeue(out value) && value.Kind == InputKind.MouseDelta && value.X == 7 && value.Y == 1 && value.TimestampUtcTicks == 5, "coalesced deltas are summed, never dropped");
+            Assert(queue.TryDequeue(out value) && value.Kind == InputKind.MouseButtonDown, "click keeps its place between motions");
+            Assert(queue.TryDequeue(out value) && value.X == 1, "motion after click is not merged across it");
+            Assert(FrameCodec.DecodeInput(FrameCodec.EncodeInput(InputEvent.MouseDelta(-12, 34, 9))).Y == 34, "delta round-trips on the wire");
         }
 
         private static void TestQueueSignals()
@@ -170,13 +179,37 @@ namespace WinputLan.Tests
             Assert(policy.ShouldEmit(InputKind.MouseWheel, "received", now.AddMilliseconds(250)), "high frequency update resumes at four hertz");
         }
 
-        private static void TestInputCapturePolicy()
+        private static void TestInputRouting()
         {
-            Assert(!InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseMove, true), "published mouse move remains local");
-            Assert(InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseButtonDown, true), "published mouse down suppresses local click");
-            Assert(InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseButtonUp, true), "published mouse up suppresses local click");
-            Assert(InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseWheel, true), "published wheel suppresses local scroll");
-            Assert(!InputCapturePolicy.ShouldSuppressPublished(InputKind.MouseButtonDown, false), "unpublished input is never suppressed");
+            var routing = new InputRoutingState();
+            uint ctrl = InputRoutingState.KeyId(0xA2), two = InputRoutingState.KeyId((ushort)'2'), a = InputRoutingState.KeyId((ushort)'A');
+            // Switch to remote while the chord modifier is physically held: its release must stay local.
+            Assert(routing.Press(ctrl) == InputRoute.Local, "modifier pressed before switching is local");
+            routing.SetRemoteActive(true);
+            Assert(routing.Release(ctrl) == InputRoute.Local, "local press is released locally, never stuck");
+            Assert(routing.Press(a) == InputRoute.Remote && routing.Release(a) == InputRoute.Remote, "keys typed during control go remote");
+            Assert(routing.Continuous() == InputRoute.Remote, "motion and wheel go remote while active");
+            var left = InputRoutingState.ButtonId(0x0201);
+            Assert(routing.Press(left) == InputRoute.Remote, "click during control goes remote");
+            // Return chord pressed remotely: after switching back, stray releases are handled locally and harmlessly.
+            Assert(routing.Press(ctrl) == InputRoute.Remote, "return chord modifier is forwarded");
+            routing.SetRemoteActive(false);
+            Assert(routing.Release(ctrl) == InputRoute.Local && routing.Release(left) == InputRoute.Local, "remote presses are forgotten after ReleaseAll");
+            Assert(routing.Continuous() == InputRoute.Local && routing.Press(two) == InputRoute.Local, "local machine owns input again");
+            Assert(InputRoutingState.ButtonId(0x0201) != InputRoutingState.KeyId(0x01), "button ids never collide with virtual keys");
+        }
+
+        private static void TestUpdateSchedule()
+        {
+            var now = new DateTime(2026, 9, 23, 12, 0, 0, DateTimeKind.Utc).Ticks;
+            Assert(UpdateSchedule.IsDue(UpdateCheckFrequency.Daily, 0, now), "never checked is due");
+            Assert(!UpdateSchedule.IsDue(UpdateCheckFrequency.Daily, now - TimeSpan.FromHours(2).Ticks, now), "daily waits after a recent check");
+            Assert(UpdateSchedule.IsDue(UpdateCheckFrequency.Daily, now - TimeSpan.FromHours(21).Ticks, now), "daily is due next day");
+            Assert(!UpdateSchedule.IsDue(UpdateCheckFrequency.Weekly, now - TimeSpan.FromDays(3).Ticks, now), "weekly waits a week");
+            Assert(UpdateSchedule.IsDue(UpdateCheckFrequency.Weekly, now - TimeSpan.FromDays(8).Ticks, now), "weekly is due after a week");
+            Assert(!UpdateSchedule.IsDue(UpdateCheckFrequency.Never, 0, now), "never disables automatic checks");
+            Assert(UpdateSchedule.IsDue(UpdateCheckFrequency.Daily, now + TimeSpan.FromDays(1).Ticks, now), "future timestamp from clock skew is due");
+            Assert(UpdateSchedule.Next(UpdateSchedule.Next(UpdateSchedule.Next(UpdateCheckFrequency.Daily))) == UpdateCheckFrequency.Daily, "frequency button cycles");
         }
 
         private static void TestRequestAttemptOwnership()
@@ -223,6 +256,12 @@ namespace WinputLan.Tests
         {
             Assert(PointerCoordinates.Normalize(100, 0, 200) == 32932, "source pixels normalize into transport space");
             Assert(PointerCoordinates.ClampNormalized(70000) == 65535 && PointerCoordinates.ClampNormalized(-2) == 0, "destination consumes normalized coordinates independently");
+            foreach (var size in new[] { 1920, 2560, 3840, 1366 })
+                for (var pixel = 0; pixel < size; pixel += 7)
+                {
+                    var norm = PointerCoordinates.ToAbsolute(pixel - 1920, -1920, size);
+                    Assert(norm * (long)size / 65536 == pixel, "absolute mapping lands on the exact pixel");
+                }
         }
 
         private static void TestPrivacyLog()

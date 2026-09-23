@@ -47,6 +47,8 @@ namespace WinputLan
         private LowLevelInputCapture _capture;
         private HotkeyBypassDetector _hotkeyBypass;
         private bool _remoteActive;
+        private bool _updateBusy;
+        private DispatcherTimer _updateTimer;
         private Forms.NotifyIcon _trayIcon;
         private readonly BackgroundLifecycle _backgroundLifecycle;
         private readonly InputLatencyWindow _latencyWindow = new InputLatencyWindow();
@@ -67,6 +69,7 @@ namespace WinputLan
             LocalAddressText.Text = Environment.MachineName + "  |  TCP " + _config.ListenPort;
             LocalIpText.Text = "IP: " + LocalIPv4Address();
             BackgroundModeCheckBox.IsChecked = _config.ContinueInBackground;
+            UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             VersionText.Text = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
@@ -120,6 +123,7 @@ namespace WinputLan
                 _accessCodeTimer.Tick += (s, e) => _listenerPairingCoordinator?.RefreshExpiredAccessCode();
                 _accessCodeTimer.Start();
                 CreateTrayIcon();
+                StartAutomaticUpdateChecks();
                 AddLog("local", "local", "Hooks", "armed-controller-only");
             }
             catch (Exception ex)
@@ -147,6 +151,7 @@ namespace WinputLan
             _listenerCts?.Cancel();
             _outboundRequestCts?.Cancel();
             _accessCodeTimer?.Stop();
+            _updateTimer?.Stop();
             _listenerTransport?.Dispose();
             _transport.Dispose();
             _hotkeys?.Dispose();
@@ -210,7 +215,31 @@ namespace WinputLan
         private void MachinesButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToTop(); SetInputTarget(false); }
         private void ShortcutsButton_Click(object sender, RoutedEventArgs e) { DashboardScroll.ScrollToVerticalOffset(360); ShowShortcutsEditor(); }
         private void LogNavButton_Click(object sender, RoutedEventArgs e) { LogSection.BringIntoView(); }
-        private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(); }
+        private async void UpdatesButton_Click(object sender, RoutedEventArgs e) { await CheckUpdatesAsync(true); }
+
+        private void UpdateFrequencyButton_Click(object sender, RoutedEventArgs e)
+        {
+            _config.UpdateCheckFrequency = UpdateSchedule.Next(_config.UpdateCheckFrequency);
+            UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
+            try { _configStore.Save(_config); } catch { }
+        }
+
+        private static string FrequencyLabel(UpdateCheckFrequency frequency)
+        {
+            return "Atualizações automáticas: " + (frequency == UpdateCheckFrequency.Daily ? "diárias" : frequency == UpdateCheckFrequency.Weekly ? "semanais" : "desligadas");
+        }
+
+        // Checks shortly after start and then periodically, so a copy living in the tray for days still updates.
+        private void StartAutomaticUpdateChecks()
+        {
+            _updateTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(8) };
+            _updateTimer.Tick += async (s, e) =>
+            {
+                _updateTimer.Interval = TimeSpan.FromHours(1);
+                if (UpdateSchedule.IsDue(_config.UpdateCheckFrequency, _config.LastUpdateCheckUtcTicks, DateTime.UtcNow.Ticks)) await CheckUpdatesAsync(false);
+            };
+            _updateTimer.Start();
+        }
         private void ClearLogButton_Click(object sender, RoutedEventArgs e) { _transactionLog.Clear(); RefreshLog(); }
         private void AcceptPairButton_Click(object sender, RoutedEventArgs e) { try { _listenerPairingCoordinator.AcceptPending(); PairingOverlay.Visibility = Visibility.Collapsed; } catch (Exception ex) { MessageBox.Show(ex.Message, "Acesso", MessageBoxButton.OK, MessageBoxImage.Warning); } }
         private void DenyPairButton_Click(object sender, RoutedEventArgs e) { _listenerPairingCoordinator?.DenyPending(); PairingOverlay.Visibility = Visibility.Collapsed; }
@@ -364,6 +393,7 @@ namespace WinputLan
             }
             _remoteActive = remote;
             _inputRouter?.SetRemoteActive(remote);
+            _capture?.SetRemoteActive(remote);
             RemoteDot.Fill = remote ? (Brush)FindResource("AccentBrush") : (Brush)FindResource("MutedBrush");
             TargetStateText.Text = remote ? "Enviando entrada" : "Aguardando atalho";
             RemoteStateText.Text = remote ? "Enviando entrada para máquina" : "Pronto para enviar entrada";
@@ -376,6 +406,8 @@ namespace WinputLan
         {
             Dispatcher.Invoke(() =>
             {
+                // A lost session must hand the pinned cursor and keyboard back to this machine immediately.
+                if (state != PeerConnectionState.Connected && _remoteActive) SetInputTarget(false);
                 if (state == PeerConnectionState.Connected) { RemoteNameText.Text = "Máquina vinculada"; RemoteAddressText.Text = _config.RemoteAddress ?? "Rede local"; LatencyText.Text = "Conectada agora"; RemoteStateText.Text = "Pronto para enviar entrada"; }
                 else if (state == PeerConnectionState.Offline) { _capture?.Dispose(); _capture = null; LatencyText.Text = "Última conexão indisponível"; RemoteStateText.Text = "Não está acessível agora"; RemoteBadgeText.Text = "Offline"; }
                 AddLog("remote", "local", "Transport", state.ToString());
@@ -391,9 +423,9 @@ namespace WinputLan
         private void EnsureControllerCapture()
         {
             if (_capture != null) return;
+            // Runs on the hook thread: both chords are claimed here because a suppressed chord never reaches RegisterHotKey.
             _capture = new LowLevelInputCapture(_inputRouter, _hotkeyBypass, action =>
             {
-                if (!_remoteActive) return false;
                 Dispatcher.BeginInvoke(new Action(() => SetInputTarget(action == HotkeyAction.SelectRemote)));
                 return true;
             });
@@ -527,9 +559,10 @@ namespace WinputLan
             }
         }
 
-        private async Task CheckUpdatesAsync()
+        private async Task CheckUpdatesAsync(bool manual)
         {
-            UpdatesButton.IsEnabled = false; UpdatesButton.Content = "Updates · checking…";
+            if (_updateBusy) return;
+            _updateBusy = true; UpdatesButton.IsEnabled = false; UpdatesButtonText.Text = "Verificando…";
             try
             {
                 using (var handler = new HttpClientHandler { AllowAutoRedirect = false })
@@ -537,25 +570,32 @@ namespace WinputLan
                 {
                     var updater = new GitHubUpdater(http);
                     var manifest = await updater.ReadManifestAsync(new Uri("https://github.com/luingry/WinputLan/releases/latest/download/update-manifest.json"), CancellationToken.None);
+                    _config.LastUpdateCheckUtcTicks = DateTime.UtcNow.Ticks;
+                    try { _configStore.Save(_config); } catch { }
                     string reason;
                     if (!ReleaseManifestValidator.TryValidate(manifest, InstalledVersion, out reason))
                     {
-                        UpdatesButton.Content = "Updates · up to date"; AddLog("github", "local", "Update", "no-update");
-                        MessageBox.Show("No newer verified update is available.\n\n" + reason, "Updates", MessageBoxButton.OK, MessageBoxImage.Information); return;
+                        AddLog("github", "local", "Update", "no-update");
+                        if (manual) MessageBox.Show("Você já está na versão mais recente (" + InstalledVersion + ").", "Atualizações", MessageBoxButton.OK, MessageBoxImage.Information);
+                        return;
                     }
-                    UpdatesButton.Content = "Updates · downloading…";
-                    var installer = await updater.DownloadAndValidateAsync(manifest, InstalledVersion, Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), CancellationToken.None);
-                    UpdatesButton.Content = "Updates · ready"; AddLog("github", "local", "Update", "validated");
-                    if (MessageBox.Show("Verified update " + manifest.Version + " is ready. Start its installer now?", "Updates", MessageBoxButton.YesNo, MessageBoxImage.Information) == MessageBoxResult.Yes)
-                    {
-                        Process.Start(new ProcessStartInfo(installer) { UseShellExecute = true });
-                        // Exit for real (not to tray) so the setup can replace the locked executable.
-                        ExitFromTray();
-                    }
+                    var question = "A versão " + manifest.Version + " do Winput LAN está disponível (instalada: " + InstalledVersion + ").\n\nBaixar e instalar agora? O app fecha durante a instalação e reabre sozinho.";
+                    if (MessageBox.Show(question, "Atualização disponível", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) { AddLog("github", "local", "Update", "postponed"); return; }
+                    var progress = new Progress<int>(p => UpdatesButtonText.Text = "Baixando " + p + "%");
+                    var installer = await updater.DownloadAndValidateAsync(manifest, InstalledVersion, Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), progress, CancellationToken.None);
+                    UpdatesButtonText.Text = "Instalando…"; AddLog("github", "local", "Update", "validated");
+                    // Silent Inno setup; its [Run] section relaunches the app for the signed-in user when it finishes.
+                    Process.Start(new ProcessStartInfo(installer, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS") { UseShellExecute = true });
+                    // Exit for real (not to tray) so the setup can replace the locked executable.
+                    ExitFromTray();
                 }
             }
-            catch (Exception ex) { UpdatesButton.Content = "Updates · error"; AddLog("github", "local", "Update", "error"); MessageBox.Show("Update check failed safely. No installer was started.\n\n" + ex.Message, "Updates", MessageBoxButton.OK, MessageBoxImage.Warning); }
-            finally { UpdatesButton.IsEnabled = true; }
+            catch (Exception ex)
+            {
+                AddLog("github", "local", "Update", "error");
+                if (manual) MessageBox.Show("Não foi possível atualizar. Nenhum instalador foi executado.\n\n" + ex.Message, "Atualizações", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally { _updateBusy = false; UpdatesButton.IsEnabled = true; if (UpdatesButtonText.Text != "Instalando…") UpdatesButtonText.Text = "Atualizações"; }
         }
 
         private static string InstalledVersion { get { return typeof(MainWindow).Assembly.GetName().Version.ToString(3); } }

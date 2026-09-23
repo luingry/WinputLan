@@ -5,6 +5,20 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.2.1] - 2026-09-23
+
+### Added
+
+- Automatic update checks (daily, weekly or off), download progress, silent install and automatic relaunch.
+- Mouse side buttons (back/forward) and horizontal scrolling on the controlled machine.
+
+### Fixed
+
+- Controller cursor no longer moves along with the remote one: it stays pinned while control is remote.
+- Smooth remote pointer: relative motion, input hooks on a dedicated thread and sampled latency ACKs.
+- Clicks land where the remote cursor is, including on scaled and multi-monitor displays.
+- Returning control with the shortcut works and no modifier key stays stuck on either machine.
+
 ## [0.2.0] - 2026-09-21
 
 ### Added

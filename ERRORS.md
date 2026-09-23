@@ -118,3 +118,15 @@
 - **Causa:** a chave foi gerada dentro do sandbox do Codex, cujo `%LOCALAPPDATA%` não persiste para o usuário.
 - **Solução:** novo par RSA-3072 gerado fora do sandbox, chave pública fixada em `Updates.cs` e `KeyId` rotacionado para `winputlan-ota-rsa-2026-09b` antes da primeira release pública.
 - **Prevenção:** gerar chaves de release apenas no perfil real e confirmar `Test-Path` antes de cadastrar o secret; faça backup do PEM fora do repositório.
+
+## Controle remoto: stuttering, dois cursores juntos, atalho de volta e cliques (0.2.0)
+
+- **Sintoma:** movimento travado; o cursor do controlador se movia junto com o remoto; o atalho para devolver o controle não parecia funcionar; cliques imprecisos.
+- **Causas:**
+  1. Hooks de baixo nível instalados na thread da UI WPF: todo o input do sistema esperava a UI.
+  2. O movimento local não era suprimido (as coordenadas absolutas dependiam do cursor local andar), então os dois cursores se moviam.
+  3. As teclas soltas do atalho eram encaminhadas ao remoto e bloqueadas localmente, deixando Ctrl/Shift/Alt presos no controlador.
+  4. O app não é DPI-aware por monitor; os hooks e o `SendInput` absoluto usavam espaços de coordenadas diferentes em telas com escala.
+  5. `ReleaseAll` soltava botões que nunca foram pressionados.
+- **Solução:** hooks numa thread dedicada com loop de mensagens; cursor local fixado no centro e envio de deltas relativos (`MouseDelta`); `InputRoutingState` garante que cada soltura vá para a mesma máquina da pressão; `SetThreadDpiAwarenessContext(PER_MONITOR_AWARE_V2)` no hook e em volta do `SendInput`; botões pressionados rastreados.
+- **Prevenção:** nunca faça trabalho de UI dentro de hooks LL; testes de injeção devem ser DPI-aware (o `SendInput` absoluto usa o contexto de DPI da thread que chama); smoke `20 deltas land exactly` valida o pixel.

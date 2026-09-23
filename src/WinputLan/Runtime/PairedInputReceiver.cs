@@ -10,6 +10,9 @@ namespace WinputLan.Runtime
         private readonly PeerTransport _transport;
         private readonly IInputSink _sink;
         private bool _disposed;
+        private int _lastAckTick;
+        // Motion latency is sampled, not echoed per event: one ACK per mouse sample doubled traffic on the hot path.
+        private const int AckIntervalMs = 100;
 
         public PairedInputReceiver(PeerTransport transport, IInputSink sink)
         {
@@ -49,7 +52,9 @@ namespace WinputLan.Runtime
                 var input = FrameCodec.DecodeInput(frame.Payload);
                 var accepted = _sink.Publish(input);
                 InputAudited?.Invoke(input.Kind, accepted ? "received" : "dropped-sink");
-                if (accepted) _ = SendAckAsync(input.TimestampUtcTicks);
+                var tick = Environment.TickCount;
+                var motion = input.Kind == InputKind.MouseDelta || input.Kind == InputKind.MouseMove;
+                if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; _ = SendAckAsync(input.TimestampUtcTicks); }
             }
             catch { InputAudited?.Invoke(InputKind.KeyDown, "dropped-invalid"); }
         }

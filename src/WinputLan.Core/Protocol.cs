@@ -26,7 +26,9 @@ namespace WinputLan.Core
         MouseButtonUp = 3,
         MouseWheel = 4,
         KeyDown = 5,
-        KeyUp = 6
+        KeyUp = 6,
+        // Relative pointer motion in pixels (X/Y carry dx/dy); the target applies it to its own cursor.
+        MouseDelta = 7
     }
 
     public sealed class Frame
@@ -59,6 +61,11 @@ namespace WinputLan.Core
             return new InputEvent { Kind = InputKind.MouseMove, X = x, Y = y, TimestampUtcTicks = timestampUtcTicks };
         }
 
+        public static InputEvent MouseDelta(int dx, int dy, long timestampUtcTicks)
+        {
+            return new InputEvent { Kind = InputKind.MouseDelta, X = dx, Y = dy, TimestampUtcTicks = timestampUtcTicks };
+        }
+
         public static InputEvent Key(InputKind kind, ushort virtualKey, ushort scanCode, uint flags, long timestampUtcTicks)
         {
             if (kind != InputKind.KeyDown && kind != InputKind.KeyUp) throw new ArgumentException("Key event must be down or up.", "kind");
@@ -86,6 +93,14 @@ namespace WinputLan.Core
         }
 
         public static int ClampNormalized(int value) { return Math.Max(0, Math.Min(65535, value)); }
+
+        // Inverse of SendInput's absolute mapping (pixel = norm * size / 65536), so the injected cursor lands on the exact pixel.
+        public static int ToAbsolute(int pixel, int origin, int size)
+        {
+            if (size <= 0) return 0;
+            var offset = Math.Max(0, Math.Min(size - 1, pixel - origin));
+            return (int)Math.Min(65535, (offset * 65536L + size - 1) / size);
+        }
     }
 
     public static class ProtocolConstants

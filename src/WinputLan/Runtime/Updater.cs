@@ -21,16 +21,21 @@ namespace WinputLan.Runtime
         {
             Uri ignored;
             if (manifestUri == null || !ReleaseManifestValidator.TryGitHubUrl(manifestUri.AbsoluteUri, 2048, out ignored)) throw new InvalidDataException("Manifest URL must be pinned HTTPS GitHub.");
-            var bytes = await ReadPinnedBytesAsync(manifestUri, ManifestMaxBytes, cancellationToken).ConfigureAwait(false);
+            var bytes = await ReadPinnedBytesAsync(manifestUri, ManifestMaxBytes, null, cancellationToken).ConfigureAwait(false);
             var serializer = new DataContractJsonSerializer(typeof(ReleaseManifest));
             using (var stream = new MemoryStream(bytes)) return (ReleaseManifest)serializer.ReadObject(stream);
         }
 
-        public async Task<string> DownloadAndValidateAsync(ReleaseManifest manifest, string currentVersion, string destinationDirectory, CancellationToken cancellationToken)
+        public Task<string> DownloadAndValidateAsync(ReleaseManifest manifest, string currentVersion, string destinationDirectory, CancellationToken cancellationToken)
+        {
+            return DownloadAndValidateAsync(manifest, currentVersion, destinationDirectory, null, cancellationToken);
+        }
+
+        public async Task<string> DownloadAndValidateAsync(ReleaseManifest manifest, string currentVersion, string destinationDirectory, IProgress<int> percent, CancellationToken cancellationToken)
         {
             string reason;
             if (!ReleaseManifestValidator.TryValidate(manifest, currentVersion, out reason)) throw new InvalidDataException(reason);
-            var bytes = await ReadPinnedBytesAsync(new Uri(manifest.AssetUrl), AssetMaxBytes, cancellationToken).ConfigureAwait(false);
+            var bytes = await ReadPinnedBytesAsync(new Uri(manifest.AssetUrl), AssetMaxBytes, percent, cancellationToken).ConfigureAwait(false);
             using (var sha = SHA256.Create())
             {
                 var hash = BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", string.Empty);
@@ -49,7 +54,7 @@ namespace WinputLan.Runtime
             finally { if (File.Exists(tempPath)) File.Delete(tempPath); }
         }
 
-        private async Task<byte[]> ReadPinnedBytesAsync(Uri initialUri, int maxBytes, CancellationToken cancellationToken)
+        private async Task<byte[]> ReadPinnedBytesAsync(Uri initialUri, int maxBytes, IProgress<int> percent, CancellationToken cancellationToken)
         {
             var current = initialUri;
             for (var redirects = 0; redirects <= 5; redirects++)
@@ -66,9 +71,25 @@ namespace WinputLan.Runtime
                     }
                     if (response.StatusCode != HttpStatusCode.OK) throw new InvalidDataException("GitHub returned " + (int)response.StatusCode + ".");
                     if (response.Content.Headers.ContentLength.HasValue && response.Content.Headers.ContentLength.Value > maxBytes) throw new InvalidDataException("Download is too large.");
-                    var bytes = await response.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
-                    if (bytes.Length > maxBytes) throw new InvalidDataException("Download is too large.");
-                    return bytes;
+                    var total = response.Content.Headers.ContentLength;
+                    using (var source = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
+                    using (var buffer = new MemoryStream(total.HasValue ? (int)total.Value : 0))
+                    {
+                        var chunk = new byte[81920];
+                        var lastPercent = -1;
+                        int read;
+                        while ((read = await source.ReadAsync(chunk, 0, chunk.Length, cancellationToken).ConfigureAwait(false)) > 0)
+                        {
+                            if (buffer.Length + read > maxBytes) throw new InvalidDataException("Download is too large.");
+                            buffer.Write(chunk, 0, read);
+                            if (percent != null && total.HasValue && total.Value > 0)
+                            {
+                                var done = (int)(buffer.Length * 100 / total.Value);
+                                if (done != lastPercent) { lastPercent = done; percent.Report(done); }
+                            }
+                        }
+                        return buffer.ToArray();
+                    }
                 }
             }
             throw new InvalidDataException("Too many GitHub redirects.");

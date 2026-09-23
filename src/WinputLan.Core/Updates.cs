@@ -29,6 +29,30 @@ namespace WinputLan.Core
         public static bool operator <=(SemVer left, SemVer right) { return left.CompareTo(right) <= 0; }
     }
 
+    public enum UpdateCheckFrequency
+    {
+        Daily = 0,
+        Weekly = 1,
+        Never = 2
+    }
+
+    public static class UpdateSchedule
+    {
+        public static bool IsDue(UpdateCheckFrequency frequency, long lastCheckUtcTicks, long nowUtcTicks)
+        {
+            if (frequency == UpdateCheckFrequency.Never) return false;
+            // A clock moved backwards must not suppress checks forever.
+            if (lastCheckUtcTicks <= 0 || lastCheckUtcTicks > nowUtcTicks) return true;
+            var interval = frequency == UpdateCheckFrequency.Weekly ? TimeSpan.FromDays(7) : TimeSpan.FromHours(20);
+            return nowUtcTicks - lastCheckUtcTicks >= interval.Ticks;
+        }
+
+        public static UpdateCheckFrequency Next(UpdateCheckFrequency frequency)
+        {
+            return frequency == UpdateCheckFrequency.Daily ? UpdateCheckFrequency.Weekly : frequency == UpdateCheckFrequency.Weekly ? UpdateCheckFrequency.Never : UpdateCheckFrequency.Daily;
+        }
+    }
+
     public sealed class ReleaseManifest
     {
         public string Version { get; set; }

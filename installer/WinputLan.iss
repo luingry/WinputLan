@@ -36,6 +36,9 @@ Name: "{group}\Winput LAN"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Winput LAN (Private TCP)"" description=""Winput LAN secure peer input transport; Private profile only."" dir=in action=allow enable=yes profile=Private protocol=TCP localport=45900 program=""{app}\WinputLan.exe"""; Flags: runhidden waituntilterminated; StatusMsg: "Creating the explicit Private-profile firewall rule..."
+Filename: "{app}\{#AppExeName}"; Description: "Abrir Winput LAN"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; OTA updates run silently; reopen the app for the signed-in user (not elevated) when they finish.
+Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""Winput LAN (Private TCP)"" program=""{app}\WinputLan.exe"""; Flags: runhidden waituntilterminated; RunOnceId: "RemoveWinputLanFirewallRule"

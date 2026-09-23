@@ -20,6 +20,9 @@ namespace WinputLan.Core
         [DataMember(Order = 10)] public string RemoteHotkey { get; set; }
         [DataMember(Order = 11)] public byte[] PinnedSecret { get; set; }
         [DataMember(Order = 12)] public bool ContinueInBackground { get; set; }
+        // Missing in older config files, which then default to Daily (0).
+        [DataMember(Order = 13)] public UpdateCheckFrequency UpdateCheckFrequency { get; set; }
+        [DataMember(Order = 14)] public long LastUpdateCheckUtcTicks { get; set; }
 
         public static WinputConfig CreateDefault()
         {

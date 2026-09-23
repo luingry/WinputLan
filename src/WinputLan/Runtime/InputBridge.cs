@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
-using System.Threading.Tasks;
 using WinputLan.Core;
 
 namespace WinputLan.Runtime
@@ -18,6 +17,8 @@ namespace WinputLan.Runtime
         void ReleaseAll();
     }
 
+    // Low-level hooks run on a dedicated thread with its own message loop. Windows blocks the whole
+    // system input path while a hook runs, so they must never share the WPF dispatcher thread.
     public sealed class LowLevelInputCapture : IDisposable
     {
         private const int WhKeyboardLl = 13;
@@ -30,45 +31,111 @@ namespace WinputLan.Runtime
         private const int WmMButtonDown = 0x0207;
         private const int WmMButtonUp = 0x0208;
         private const int WmMouseWheel = 0x020A;
+        private const int WmXButtonDown = 0x020B;
+        private const int WmXButtonUp = 0x020C;
+        private const int WmMouseHWheel = 0x020E;
+        private const int WmQuit = 0x0012;
+        private const int WmApplyRemote = 0x8001;
         private const uint LlkhfInjected = 0x10;
         private const uint LlmhfInjected = 0x01;
+        // A single hook event never legitimately moves this far from the anchor; larger jumps are stale positions.
+        private const int MaxDeltaPerEvent = 2000;
         private readonly IInputSink _sink;
         private readonly IHotkeyChordDetector _hotkeyChordDetector;
         private readonly Func<HotkeyAction, bool> _hotkeyAction;
         private readonly HashSet<ushort> _suppressedHotkeyUps = new HashSet<ushort>();
+        private readonly InputRoutingState _routing = new InputRoutingState();
         private NativeMethods.HookProc _keyboardProc;
         private NativeMethods.HookProc _mouseProc;
         private IntPtr _keyboardHook;
         private IntPtr _mouseHook;
+        private Thread _thread;
+        private uint _threadId;
+        private NativeMethods.POINT _anchor;
+        private NativeMethods.POINT _restore;
         private bool _disposed;
 
         public LowLevelInputCapture(IInputSink sink, IHotkeyChordDetector hotkeyChordDetector = null, Func<HotkeyAction, bool> hotkeyAction = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyChordDetector = hotkeyChordDetector; _hotkeyAction = hotkeyAction; }
 
         public bool Start()
         {
-            if (_keyboardHook != IntPtr.Zero) return true;
+            if (_thread != null) return _keyboardHook != IntPtr.Zero;
+            var started = new ManualResetEventSlim(false);
+            _thread = new Thread(() => HookThread(started)) { IsBackground = true, Name = "WinputLan input hooks", Priority = ThreadPriority.Highest };
+            _thread.Start();
+            started.Wait();
+            started.Dispose();
+            if (_keyboardHook == IntPtr.Zero || _mouseHook == IntPtr.Zero) { Stop(); return false; }
+            return true;
+        }
+
+        // Applied on the hook thread so the cursor anchor and the routing switch are ordered with hook callbacks.
+        public void SetRemoteActive(bool active)
+        {
+            if (_threadId != 0) NativeMethods.PostThreadMessage(_threadId, WmApplyRemote, new IntPtr(active ? 1 : 0), IntPtr.Zero);
+        }
+
+        public void Stop()
+        {
+            var thread = _thread;
+            if (thread == null) return;
+            if (_threadId != 0) NativeMethods.PostThreadMessage(_threadId, WmQuit, IntPtr.Zero, IntPtr.Zero);
+            thread.Join(2000);
+            _thread = null;
+            _threadId = 0;
+        }
+
+        public void Dispose() { if (_disposed) return; _disposed = true; Stop(); }
+
+        private void HookThread(ManualResetEventSlim started)
+        {
+            _threadId = NativeMethods.GetCurrentThreadId();
+            // Hook positions are physical pixels; the anchor and SetCursorPos must use the same space on scaled displays.
+            NativeMethods.UsePhysicalPixels();
             _keyboardProc = KeyboardCallback;
             _mouseProc = MouseCallback;
             var module = NativeMethods.GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName);
             _keyboardHook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _keyboardProc, module, 0);
             _mouseHook = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseProc, module, 0);
-            if (_keyboardHook == IntPtr.Zero || _mouseHook == IntPtr.Zero)
+            started.Set();
+            try
             {
-                Stop();
-                return false;
+                if (_keyboardHook == IntPtr.Zero || _mouseHook == IntPtr.Zero) return;
+                NativeMethods.MSG msg;
+                while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
+                {
+                    if (msg.Message == WmApplyRemote) { ApplyRemote(msg.WParam != IntPtr.Zero); continue; }
+                    NativeMethods.TranslateMessage(ref msg);
+                    NativeMethods.DispatchMessage(ref msg);
+                }
             }
-            return true;
+            finally
+            {
+                ApplyRemote(false);
+                if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
+                if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
+                _keyboardHook = IntPtr.Zero;
+                _mouseHook = IntPtr.Zero;
+            }
         }
 
-        public void Stop()
+        private void ApplyRemote(bool active)
         {
-            if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
-            if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
-            _keyboardHook = IntPtr.Zero;
-            _mouseHook = IntPtr.Zero;
+            if (active == _routing.RemoteActive) return;
+            if (active)
+            {
+                // Pin the local cursor at the primary screen centre: every hook position is then anchor + motion.
+                NativeMethods.GetCursorPos(out _restore);
+                _anchor = new NativeMethods.POINT { X = NativeMethods.GetSystemMetrics(NativeMethods.SmCxScreen) / 2, Y = NativeMethods.GetSystemMetrics(NativeMethods.SmCyScreen) / 2 };
+                NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
+                _routing.SetRemoteActive(true);
+            }
+            else
+            {
+                _routing.SetRemoteActive(false);
+                NativeMethods.SetCursorPos(_restore.X, _restore.Y);
+            }
         }
-
-        public void Dispose() { if (_disposed) return; _disposed = true; Stop(); }
 
         private IntPtr KeyboardCallback(int code, IntPtr wParam, IntPtr lParam)
         {
@@ -91,7 +158,9 @@ namespace WinputLan.Runtime
                             }
                             else if (_suppressedHotkeyUps.Remove(value.VirtualKey)) return (IntPtr)1;
                         }
-                        if (_sink.Publish(value)) return (IntPtr)1;
+                        var id = InputRoutingState.KeyId(value.VirtualKey);
+                        var route = kind.Value == InputKind.KeyDown ? _routing.Press(id) : _routing.Release(id);
+                        if (route == InputRoute.Remote && _sink.Publish(value)) return (IntPtr)1;
                     }
                 }
             }
@@ -106,12 +175,26 @@ namespace WinputLan.Runtime
                 if ((data.Flags & LlmhfInjected) == 0 && data.ExtraInfo.ToInt64() != SendInputSink.InputTag)
                 {
                     var message = wParam.ToInt32();
+                    var now = DateTime.UtcNow.Ticks;
+                    if (message == WmMouseMove)
+                    {
+                        if (_routing.Continuous() != InputRoute.Remote) return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+                        var dx = data.Point.X - _anchor.X;
+                        var dy = data.Point.Y - _anchor.Y;
+                        if ((dx == 0 && dy == 0) || Math.Abs(dx) > MaxDeltaPerEvent || Math.Abs(dy) > MaxDeltaPerEvent) return (IntPtr)1;
+                        if (_sink.Publish(InputEvent.MouseDelta(dx, dy, now))) return (IntPtr)1;
+                        return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+                    }
                     InputEvent value = null;
-                    if (message == WmMouseMove) value = InputEvent.MouseMove(PointerCoordinates.Normalize(data.Point.X, NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenWidth)), PointerCoordinates.Normalize(data.Point.Y, NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenHeight)), DateTime.UtcNow.Ticks);
-                    else if (message == WmLButtonDown || message == WmRButtonDown || message == WmMButtonDown) value = InputEvent.MouseButton(InputKind.MouseButtonDown, (uint)message, DateTime.UtcNow.Ticks);
-                    else if (message == WmLButtonUp || message == WmRButtonUp || message == WmMButtonUp) value = InputEvent.MouseButton(InputKind.MouseButtonUp, (uint)message, DateTime.UtcNow.Ticks);
-                    else if (message == WmMouseWheel) value = InputEvent.MouseWheel(unchecked((short)(data.MouseData >> 16)), DateTime.UtcNow.Ticks);
-                    if (value != null && InputCapturePolicy.ShouldSuppressPublished(value.Kind, _sink.Publish(value))) return (IntPtr)1;
+                    InputRoute route;
+                    var xButton = (ushort)(data.MouseData >> 16);
+                    if (message == WmLButtonDown || message == WmRButtonDown || message == WmMButtonDown) { value = InputEvent.MouseButton(InputKind.MouseButtonDown, (uint)message, now); route = _routing.Press(InputRoutingState.ButtonId((uint)message)); }
+                    else if (message == WmLButtonUp || message == WmRButtonUp || message == WmMButtonUp) { value = InputEvent.MouseButton(InputKind.MouseButtonUp, (uint)message, now); route = _routing.Release(InputRoutingState.ButtonId((uint)message - 1)); }
+                    else if (message == WmXButtonDown) { value = InputEvent.MouseButton(InputKind.MouseButtonDown, (uint)message, now); value.MouseData = xButton; route = _routing.Press(InputRoutingState.ButtonId((uint)WmXButtonDown | ((uint)xButton << 12))); }
+                    else if (message == WmXButtonUp) { value = InputEvent.MouseButton(InputKind.MouseButtonUp, (uint)message, now); value.MouseData = xButton; route = _routing.Release(InputRoutingState.ButtonId((uint)WmXButtonDown | ((uint)xButton << 12))); }
+                    else if (message == WmMouseWheel || message == WmMouseHWheel) { value = InputEvent.MouseWheel(unchecked((short)(data.MouseData >> 16)), now); if (message == WmMouseHWheel) value.Flags = SendInputSink.HorizontalWheelFlag; route = _routing.Continuous(); }
+                    else route = InputRoute.Local;
+                    if (value != null && route == InputRoute.Remote && _sink.Publish(value)) return (IntPtr)1;
                 }
             }
             return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
@@ -121,13 +204,21 @@ namespace WinputLan.Runtime
     public sealed class SendInputSink : IFailSafeInputSink
     {
         public const long InputTag = 0x57494E505554;
+        public const uint HorizontalWheelFlag = 1;
+        // After this idle gap the virtual cursor resyncs with the real one, which the local user may have moved.
+        private const int CursorResyncMs = 250;
         private readonly HashSet<ushort> _pressedKeys = new HashSet<ushort>();
         private readonly HashSet<uint> _pressedButtons = new HashSet<uint>();
         private readonly object _gate = new object();
+        private int _cursorX;
+        private int _cursorY;
+        private int _lastDeltaTick;
+        private bool _hasCursor;
 
         public bool Publish(InputEvent value)
         {
             if (value == null) return false;
+            var previousDpi = IntPtr.Zero;
             var input = new NativeMethods.INPUT { Type = NativeMethods.InputKeyboard };
             if (value.Kind == InputKind.KeyDown || value.Kind == InputKind.KeyUp)
             {
@@ -139,49 +230,96 @@ namespace WinputLan.Runtime
                 var flags = 0U;
                 var dx = 0;
                 var dy = 0;
+                var mouseData = 0U;
                 if (value.Kind == InputKind.MouseMove)
                 {
                     flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk;
                     dx = PointerCoordinates.ClampNormalized(value.X);
                     dy = PointerCoordinates.ClampNormalized(value.Y);
                 }
-                if (value.Kind == InputKind.MouseButtonDown) flags |= MouseButtonFlags(value.Flags, true);
-                if (value.Kind == InputKind.MouseButtonUp) flags |= MouseButtonFlags(value.Flags, false);
-                if (value.Kind == InputKind.MouseWheel) { flags = NativeMethods.MouseEventWheel; }
-                input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = dx, Dy = dy, MouseData = value.Kind == InputKind.MouseWheel ? unchecked((uint)(short)value.MouseData) : value.MouseData, Flags = flags, Time = 0, ExtraInfo = new IntPtr(InputTag) };
+                else if (value.Kind == InputKind.MouseDelta)
+                {
+                    // Relative SendInput would apply this machine's pointer acceleration a second time,
+                    // so the delta is added to a tracked cursor and injected as an exact absolute position.
+                    flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk;
+                    // SendInput maps absolute coordinates in the caller's DPI context, so it stays physical until the send.
+                    previousDpi = NativeMethods.UsePhysicalPixels();
+                    var left = NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen);
+                    var top = NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen);
+                    var width = NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenWidth);
+                    var height = NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenHeight);
+                    lock (_gate)
+                    {
+                        var tick = Environment.TickCount;
+                        if (!_hasCursor || unchecked(tick - _lastDeltaTick) > CursorResyncMs)
+                        {
+                            NativeMethods.POINT current;
+                            if (NativeMethods.GetCursorPos(out current)) { _cursorX = current.X; _cursorY = current.Y; _hasCursor = true; }
+                        }
+                        _lastDeltaTick = tick;
+                        _cursorX = Math.Max(left, Math.Min(left + width - 1, _cursorX + value.X));
+                        _cursorY = Math.Max(top, Math.Min(top + height - 1, _cursorY + value.Y));
+                        dx = PointerCoordinates.ToAbsolute(_cursorX, left, width);
+                        dy = PointerCoordinates.ToAbsolute(_cursorY, top, height);
+                    }
+                }
+                else if (value.Kind == InputKind.MouseButtonDown || value.Kind == InputKind.MouseButtonUp)
+                {
+                    var down = value.Kind == InputKind.MouseButtonDown;
+                    flags = MouseButtonFlags(value.Flags, down);
+                    if (flags == 0) return false;
+                    if (value.Flags == 0x020B || value.Flags == 0x020C) mouseData = value.MouseData;
+                }
+                else if (value.Kind == InputKind.MouseWheel)
+                {
+                    flags = value.Flags == HorizontalWheelFlag ? NativeMethods.MouseEventHWheel : NativeMethods.MouseEventWheel;
+                    mouseData = unchecked((uint)(short)value.MouseData);
+                }
+                input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = dx, Dy = dy, MouseData = mouseData, Flags = flags, Time = 0, ExtraInfo = new IntPtr(InputTag) };
             }
             uint sent;
             try { sent = NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf(typeof(NativeMethods.INPUT))); }
             catch { return false; }
+            finally { NativeMethods.RestoreDpi(previousDpi); }
             if (sent != 1) return false;
-            if (value.Kind == InputKind.KeyDown || value.Kind == InputKind.KeyUp)
+            lock (_gate)
             {
-                lock (_gate) { if (value.Kind == InputKind.KeyDown) _pressedKeys.Add(value.VirtualKey); else _pressedKeys.Remove(value.VirtualKey); }
+                if (value.Kind == InputKind.KeyDown) _pressedKeys.Add(value.VirtualKey);
+                else if (value.Kind == InputKind.KeyUp) _pressedKeys.Remove(value.VirtualKey);
+                else if (value.Kind == InputKind.MouseButtonDown) _pressedButtons.Add(ButtonKey(value.Flags, value.MouseData));
+                else if (value.Kind == InputKind.MouseButtonUp) _pressedButtons.Remove(ButtonKey(value.Flags - 1, value.MouseData));
             }
             return true;
         }
 
+        // Releases only what this sink actually pressed; stray button-ups would end drags or click at random.
         public void ReleaseAll()
         {
             ushort[] keys;
-            lock (_gate) { keys = new List<ushort>(_pressedKeys).ToArray(); _pressedKeys.Clear(); _pressedButtons.Clear(); }
+            uint[] buttons;
+            lock (_gate) { keys = new List<ushort>(_pressedKeys).ToArray(); buttons = new List<uint>(_pressedButtons).ToArray(); _pressedKeys.Clear(); _pressedButtons.Clear(); _hasCursor = false; }
             foreach (var key in keys) Publish(InputEvent.Key(InputKind.KeyUp, key, 0, 0, DateTime.UtcNow.Ticks));
-            Publish(InputEvent.MouseButton(InputKind.MouseButtonUp, 0x0201, DateTime.UtcNow.Ticks));
-            Publish(InputEvent.MouseButton(InputKind.MouseButtonUp, 0x0204, DateTime.UtcNow.Ticks));
-            Publish(InputEvent.MouseButton(InputKind.MouseButtonUp, 0x0207, DateTime.UtcNow.Ticks));
+            foreach (var button in buttons)
+            {
+                var up = InputEvent.MouseButton(InputKind.MouseButtonUp, (button & 0xFFFF) + 1, DateTime.UtcNow.Ticks);
+                up.MouseData = (ushort)(button >> 16);
+                Publish(up);
+            }
         }
+
+        private static uint ButtonKey(uint downMessage, ushort mouseData) { return downMessage == 0x020B ? downMessage | ((uint)mouseData << 16) : downMessage; }
 
         private static uint MouseButtonFlags(uint message, bool down)
         {
             switch (message)
             {
-                case 0x0201: return down ? NativeMethods.MouseEventLeftDown : NativeMethods.MouseEventLeftUp;
-                case 0x0204: return down ? NativeMethods.MouseEventRightDown : NativeMethods.MouseEventRightUp;
-                case 0x0207: return down ? NativeMethods.MouseEventMiddleDown : NativeMethods.MouseEventMiddleUp;
+                case 0x0201: case 0x0202: return down ? NativeMethods.MouseEventLeftDown : NativeMethods.MouseEventLeftUp;
+                case 0x0204: case 0x0205: return down ? NativeMethods.MouseEventRightDown : NativeMethods.MouseEventRightUp;
+                case 0x0207: case 0x0208: return down ? NativeMethods.MouseEventMiddleDown : NativeMethods.MouseEventMiddleUp;
+                case 0x020B: case 0x020C: return down ? NativeMethods.MouseEventXDown : NativeMethods.MouseEventXUp;
                 default: return 0;
             }
         }
-
     }
 
     internal static class NativeMethods
@@ -200,13 +338,36 @@ namespace WinputLan.Runtime
         internal const uint MouseEventRightUp = 0x0010;
         internal const uint MouseEventMiddleDown = 0x0020;
         internal const uint MouseEventMiddleUp = 0x0040;
+        internal const uint MouseEventXDown = 0x0080;
+        internal const uint MouseEventXUp = 0x0100;
         internal const uint MouseEventWheel = 0x0800;
+        internal const uint MouseEventHWheel = 0x1000;
         internal const uint MouseEventAbsolute = 0x8000;
         internal const uint MouseEventVirtualDesk = 0x4000;
+        internal const int SmCxScreen = 0;
+        internal const int SmCyScreen = 1;
         internal const int SmXVirtualScreen = 76;
         internal const int SmYVirtualScreen = 77;
         internal const int SmVirtualScreenWidth = 78;
         internal const int SmVirtualScreenHeight = 79;
+
+        private static readonly IntPtr PerMonitorAwareV2 = new IntPtr(-4);
+
+        // Per-thread so WPF's own DPI mode is untouched. Returns the previous context (zero if unsupported).
+        internal static IntPtr UsePhysicalPixels()
+        {
+            try { return SetThreadDpiAwarenessContext(PerMonitorAwareV2); }
+            catch (EntryPointNotFoundException) { return IntPtr.Zero; }
+        }
+
+        internal static void RestoreDpi(IntPtr previous)
+        {
+            if (previous == IntPtr.Zero) return;
+            try { SetThreadDpiAwarenessContext(previous); }
+            catch (EntryPointNotFoundException) { }
+        }
+
+        [DllImport("user32.dll")] private static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
 
         internal delegate IntPtr HookProc(int code, IntPtr wParam, IntPtr lParam);
 
@@ -214,10 +375,18 @@ namespace WinputLan.Runtime
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool UnhookWindowsHookEx(IntPtr hhk);
         [DllImport("user32.dll")] internal static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode)] internal static extern IntPtr GetModuleHandle(string lpModuleName);
+        [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();
         [DllImport("user32.dll", SetLastError = true)] internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
         [DllImport("user32.dll")] internal static extern int GetSystemMetrics(int nIndex);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetCursorPos(out POINT point);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetCursorPos(int x, int y);
+        [DllImport("user32.dll")] internal static extern int GetMessage(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool TranslateMessage(ref MSG msg);
+        [DllImport("user32.dll")] internal static extern IntPtr DispatchMessage(ref MSG msg);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool PostThreadMessage(uint threadId, int msg, IntPtr wParam, IntPtr lParam);
 
         [StructLayout(LayoutKind.Sequential)] internal struct POINT { public int X; public int Y; }
+        [StructLayout(LayoutKind.Sequential)] internal struct MSG { public IntPtr Hwnd; public int Message; public IntPtr WParam; public IntPtr LParam; public uint Time; public POINT Point; }
         [StructLayout(LayoutKind.Sequential)] internal struct KbdLlHookStruct { public uint VirtualKey; public uint ScanCode; public uint Flags; public uint Time; public IntPtr ExtraInfo; }
         [StructLayout(LayoutKind.Sequential)] internal struct MouseLlHookStruct { public POINT Point; public uint MouseData; public uint Flags; public uint Time; public IntPtr ExtraInfo; }
         [StructLayout(LayoutKind.Sequential)] internal struct INPUT { public uint Type; public InputUnion Data; }
