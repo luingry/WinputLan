@@ -112,10 +112,16 @@ namespace WinputLan.Runtime
             SslStream stream;
             lock (_gate) stream = _stream;
             if (stream == null) throw new IOException("Peer is not connected.");
-            var bytes = FrameCodec.Encode(type, unchecked((ulong)Interlocked.Increment(ref _sequence)), payload);
             await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // The sequence is taken inside the send gate so wire order always matches sequence order;
+            // numbering first let concurrent senders (heartbeat, input, ACK) reach the wire out of order,
+            // which the receiver rejects by closing the connection.
             // SslStream.WriteAsync commits the complete TLS record; FlushAsync added a scheduler hop without improving delivery.
-            try { await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false); }
+            try
+            {
+                var bytes = FrameCodec.Encode(type, unchecked((ulong)Interlocked.Increment(ref _sequence)), payload);
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            }
             finally { _sendGate.Release(); }
         }
 

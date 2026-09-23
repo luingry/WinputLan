@@ -42,6 +42,8 @@ namespace WinputLan.Loopback
                     await ValidCodeAcceptedOneWayAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
                     await VerifyHeartbeatFailSafeAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
                     await RecognizedMachineResumesWithApprovalOnlyAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
+                    await UnfocusedInputIsDiscardedAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
+                    Console.WriteLine("FOCUS GATE PASS: target injects nothing before focus or after unfocus, releases still apply, router announces focus before first input");
                     Console.WriteLine("RESUME PASS: shared trust key, names exchanged, recognized request needs only approval; untrusted, wrong key and changed certificate fall back to code");
                     Console.WriteLine("LOOPBACK PASS: invalid code hidden, deny recoverable, accept one-way, reconnect and <=50ms local ACK p95");
                 }
@@ -283,6 +285,8 @@ namespace WinputLan.Loopback
 
         private static async Task<double[]> MeasureLegacyPollingAsync(PeerTransport controller, List<double> latencies, CancellationToken token)
         {
+            // Raw frames bypass the router, so they announce focus themselves; the target discards unfocused input.
+            await controller.SendAsync(FrameType.ControlFocus, new byte[] { 1 }, token).ConfigureAwait(false);
             var queue = new InputEventQueue(); var start = Count(latencies);
             for (var i = 0; i < 30; i++)
             {
@@ -327,6 +331,54 @@ namespace WinputLan.Loopback
             public int Count { get; private set; } public bool Publish(InputEvent value) { Count++; return true; } public void ReleaseAll() { }
             public Task WaitForCountAsync(int count, CancellationToken token) { return WaitUntilAsync(() => Count >= count, token, "target did not receive all input"); }
         }
+        private static async Task UnfocusedInputIsDiscardedAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert, CancellationToken token)
+        {
+            var port = FindPort(); var targetConfig = Config("target", port); var controllerConfig = Config("controller", port);
+            using (var target = new PeerTransport()) using (var controller = new PeerTransport())
+            using (var targetPairing = new PairingCoordinator(target, targetConfig, targetCert, PairingRole.Target))
+            using (var controllerPairing = new PairingCoordinator(controller, controllerConfig, controllerCert, PairingRole.Controller))
+            {
+                var sink = new CountingSink(); var prompted = new TaskCompletionSource<bool>(); var paired = new TaskCompletionSource<bool>();
+                targetPairing.AccessRequestReceived += _ => prompted.TrySetResult(true); controllerPairing.PairingCompleted += _ => paired.TrySetResult(true);
+                using (var receiver = new PairedInputReceiver(target, sink))
+                using (var router = new InputRouter(new InputEventQueue(), controller, new RecordingSink()))
+                {
+                    var listen = target.ListenOnceAsync(port, targetCert, null, true, token); await Task.Delay(50, token).ConfigureAwait(false);
+                    controllerPairing.StartRequest(targetPairing.AccessCode); await controller.ConnectAsync("127.0.0.1", port, controllerCert, null, true, token).ConfigureAwait(false);
+                    await WaitAsync(prompted.Task, token, "target prompt missing").ConfigureAwait(false); targetPairing.AcceptPending(); await WaitAsync(paired.Task, token, "controller acceptance missing").ConfigureAwait(false);
+                    Func<Task> sendRawKey = () => controller.SendAsync(FrameType.Input, FrameCodec.EncodeInput(InputEvent.Key(InputKind.KeyDown, 0x41, 0, 0, DateTime.UtcNow.Ticks)), token);
+
+                    // 1. A fresh session is unfocused: raw input, even from the paired controller, is discarded.
+                    await sendRawKey().ConfigureAwait(false); await sendRawKey().ConfigureAwait(false);
+                    await Task.Delay(300, token).ConfigureAwait(false);
+                    if (sink.Published != 0) throw new InvalidOperationException("Target injected input before the controller announced focus.");
+
+                    // 2. The router announces focus before its first input, so nothing it sends is lost.
+                    router.SetRemoteActive(true);
+                    for (var i = 0; i < 5; i++) router.Publish(InputEvent.Key(InputKind.KeyDown, (ushort)(0x41 + i), 0, 0, DateTime.UtcNow.Ticks));
+                    await WaitUntilAsync(() => sink.Published == 5, token, "focused input was not injected in full").ConfigureAwait(false);
+
+                    // 3. After control is handed back, input is discarded again, but the release still applies.
+                    var releasesBefore = sink.Releases;
+                    router.SetRemoteActive(false);
+                    await WaitUntilAsync(() => sink.Releases > releasesBefore, token, "release after unfocus was not applied").ConfigureAwait(false);
+                    await sendRawKey().ConfigureAwait(false);
+                    await Task.Delay(300, token).ConfigureAwait(false);
+                    if (sink.Published != 5) throw new InvalidOperationException("Target injected input after the controller took focus back.");
+                    controller.Disconnect("loopback complete"); await listen.ConfigureAwait(false);
+                }
+            }
+        }
+
+        private sealed class CountingSink : IFailSafeInputSink
+        {
+            private int _published; private int _releases;
+            public int Published { get { return Volatile.Read(ref _published); } }
+            public int Releases { get { return Volatile.Read(ref _releases); } }
+            public bool Publish(InputEvent value) { Interlocked.Increment(ref _published); return true; }
+            public void ReleaseAll() { Interlocked.Increment(ref _releases); }
+        }
+
         private sealed class RecordingFailSafeSink : IFailSafeInputSink
         {
             public int Releases { get; private set; }

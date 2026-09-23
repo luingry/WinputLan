@@ -11,6 +11,8 @@ namespace WinputLan.Runtime
         private readonly IInputSink _sink;
         private bool _disposed;
         private int _lastAckTick;
+        // Third safeguard: input is injected only while the controller has announced focus on this PC.
+        private volatile bool _focused;
         // Motion latency is sampled, not echoed per event: one ACK per mouse sample doubled traffic on the hot path.
         private const int AckIntervalMs = 100;
 
@@ -44,7 +46,7 @@ namespace WinputLan.Runtime
             }
             if (frame.Type == FrameType.ControlFocus)
             {
-                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1) FocusChanged?.Invoke(frame.Payload[0] == 1);
+                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1) { _focused = frame.Payload[0] == 1; FocusChanged?.Invoke(_focused); }
                 return;
             }
             if (frame.Type == FrameType.ReleaseAll)
@@ -54,6 +56,7 @@ namespace WinputLan.Runtime
             }
             if (frame.Type != FrameType.Input) return;
             if (_transport.State != PeerConnectionState.Connected) { InputAudited?.Invoke(InputKind.KeyDown, "dropped-unpaired"); return; }
+            if (!_focused) { InputAudited?.Invoke(InputKind.KeyDown, "dropped-unfocused"); return; }
             try
             {
                 var input = FrameCodec.DecodeInput(frame.Payload);
@@ -74,6 +77,8 @@ namespace WinputLan.Runtime
 
         private void Transport_StateChanged(PeerConnectionState state, string detail)
         {
+            // Every session starts unfocused; only an explicit ControlFocus(1) opens the gate.
+            _focused = false;
             if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
         }
 

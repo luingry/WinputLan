@@ -14,6 +14,11 @@ namespace WinputLan.Runtime
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
         private volatile bool _remoteActive;
         private bool _disposed;
+        // Each activation must reach the target as ControlFocus(1) before its first input, because the
+        // target discards input while it is not focused. The drain loop waits for this announcement.
+        private readonly SemaphoreSlim _focusGate = new SemaphoreSlim(1, 1);
+        private long _activationEpoch;
+        private long _announcedEpoch;
 
         public InputRouter(InputEventQueue queue, PeerTransport transport, IInputSink releaseSink)
         {
@@ -39,11 +44,12 @@ namespace WinputLan.Runtime
         public void SetRemoteActive(bool active)
         {
             var wasActive = _remoteActive;
+            if (active && !wasActive) Interlocked.Increment(ref _activationEpoch);
             _remoteActive = active;
-            if (wasActive != active && _transport.State == PeerConnectionState.Connected) _ = SendFocusAsync(active);
+            if (active && !wasActive && _transport.State == PeerConnectionState.Connected) _ = AnnounceFocusAsync(_cts.Token);
             if (!active)
             {
-                if (wasActive && _transport.State == PeerConnectionState.Connected) _ = SendReleaseAsync();
+                if (wasActive && _transport.State == PeerConnectionState.Connected) _ = SendUnfocusAndReleaseAsync();
                 _queue.Clear();
                 ReleaseAll();
             }
@@ -67,7 +73,13 @@ namespace WinputLan.Runtime
             while (!cancellationToken.IsCancellationRequested)
             {
                 var value = await _queue.DequeueAsync(cancellationToken).ConfigureAwait(false);
-                try { await _transport.SendAsync(FrameType.Input, FrameCodec.EncodeInput(value), cancellationToken).ConfigureAwait(false); InputAudited?.Invoke(value.Kind, "sent"); }
+                try
+                {
+                    await AnnounceFocusAsync(cancellationToken).ConfigureAwait(false);
+                    // Control was handed back while this item waited: it belongs to no active session.
+                    if (!_remoteActive) { InputAudited?.Invoke(value.Kind, "dropped-inactive"); continue; }
+                    await _transport.SendAsync(FrameType.Input, FrameCodec.EncodeInput(value), cancellationToken).ConfigureAwait(false); InputAudited?.Invoke(value.Kind, "sent");
+                }
                 catch { FailSafe(); InputAudited?.Invoke(value.Kind, "dropped-disconnected"); }
             }
         }
@@ -98,10 +110,24 @@ namespace WinputLan.Runtime
             if (releasing != null) releasing.ReleaseAll();
         }
 
-        private async Task SendFocusAsync(bool focused)
+        private async Task AnnounceFocusAsync(CancellationToken cancellationToken)
         {
-            try { await _transport.SendAsync(FrameType.ControlFocus, new[] { focused ? (byte)1 : (byte)0 }, _cts.Token).ConfigureAwait(false); }
-            catch { }
+            var epoch = Interlocked.Read(ref _activationEpoch);
+            if (!_remoteActive || Interlocked.Read(ref _announcedEpoch) == epoch) return;
+            await _focusGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                if (!_remoteActive || Interlocked.Read(ref _announcedEpoch) == epoch) return;
+                await _transport.SendAsync(FrameType.ControlFocus, new byte[] { 1 }, cancellationToken).ConfigureAwait(false);
+                Interlocked.Exchange(ref _announcedEpoch, epoch);
+            }
+            finally { _focusGate.Release(); }
+        }
+
+        private async Task SendUnfocusAndReleaseAsync()
+        {
+            try { await _transport.SendAsync(FrameType.ControlFocus, new byte[] { 0 }, _cts.Token).ConfigureAwait(false); } catch { }
+            await SendReleaseAsync().ConfigureAwait(false);
         }
 
         private async Task SendReleaseAsync()

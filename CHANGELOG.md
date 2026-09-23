@@ -5,6 +5,23 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-09-23
+
+### Security
+
+- Third input safeguard: the controlled PC injects input only while the controller has announced control focus on it. The controller announces focus before the first input of every activation.
+
+### Fixed
+
+- Intermittent disconnects: frames sent concurrently (heartbeat, input, ACK) could reach the wire out of sequence order and be rejected by the receiver.
+- Label colour of primary buttons (e.g. "Controlar outra máquina") now matches their icon.
+- The dialog close (×) button has a full 44 px click target instead of a sliver next to the title.
+
+### Changed
+
+- "Esta máquina" card: "Renovar código" sits next to the code with a rotate icon; preferences are one aligned column with app-styled checkboxes and an update-frequency chip.
+- No chevron on this PC's own row.
+
 ## [0.3.0] - 2026-09-23
 
 ### Added

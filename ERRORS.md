@@ -153,3 +153,16 @@
 - **Causa:** o código carregava `assets\brand\winput-lan.ico` ao lado do exe, mas o instalador copia o `.ico` para a raiz de `{app}`. O `catch` escondia o erro.
 - **Solução:** o `.ico` virou `Resource` WPF embutido no exe e é lido via pack URI (`/WinputLan;component/assets/brand/winput-lan.ico`), no tamanho `SystemInformation.SmallIconSize`.
 - **Prevenção:** recursos visuais que o app precisa em runtime devem ser embutidos, não depender do layout de arquivos do instalador.
+
+
+## Desconexões intermitentes: "Frame sequence is not strictly increasing"
+
+- **Sintoma:** conexão caía de vez em quando sem motivo aparente.
+- **Causa:** `PeerTransport.SendAsync` numerava o frame antes de entrar no `_sendGate`. Dois envios simultâneos (heartbeat + input, ACK + heartbeat) podiam escrever na ordem inversa da numeração, e o receptor exige sequência estritamente crescente e fecha a conexão.
+- **Solução:** o número de sequência passa a ser gerado dentro do gate, junto da escrita.
+- **Prevenção:** qualquer contador que precise refletir a ordem no fio deve ser atribuído sob o mesmo lock da escrita.
+
+## Texto branco em botões verdes / X do modal difícil de clicar
+
+- **Causa (texto):** o estilo implícito de `TextBlock` no `App.xaml` força `TextBrush` em todo texto, inclusive dentro de botões. **Solução:** `Style.Resources` nos estilos de botão fazem o TextBlock herdar o `Foreground` do botão.
+- **Causa (X):** o título do modal fica na mesma célula do Grid e é declarado depois do botão, ficando por cima dele. **Solução:** `Panel.ZIndex` alto e área de 44x44 no estilo `OverlayCloseButton`.

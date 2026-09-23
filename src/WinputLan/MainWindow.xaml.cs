@@ -327,7 +327,7 @@ namespace WinputLan
 
         private static string FrequencyLabel(UpdateCheckFrequency frequency)
         {
-            return "Atualizações automáticas: " + (frequency == UpdateCheckFrequency.Daily ? "diárias" : frequency == UpdateCheckFrequency.Weekly ? "semanais" : "desligadas");
+            return frequency == UpdateCheckFrequency.Daily ? "Diárias" : frequency == UpdateCheckFrequency.Weekly ? "Semanais" : "Desligadas";
         }
 
         // Checks shortly after start and then periodically, so a copy living in the tray for days still updates.
