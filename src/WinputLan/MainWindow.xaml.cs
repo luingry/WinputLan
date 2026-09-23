@@ -391,7 +391,6 @@ namespace WinputLan
             ApplyRow(model.Local, LocalMachineRow, LocalRowAccent, LocalStatusBadge, LocalDot, LocalBadgeText, LocalControllerBadge, LocalNameText, null, LocalSubtitleText, LocalStateText, LocalDetailText);
             ApplyRow(model.Other, RemoteMachineRow, RemoteRowAccent, RemoteStatusBadge, RemoteDot, RemoteBadgeText, RemoteControllerBadge, RemoteNameText, RemoteAddressText, RemoteStateText, TargetStateText, LatencyText);
             if (model.Other.Visible && !inbound && outbound == OutboundSession.None && !string.IsNullOrWhiteSpace(_outboundNote)) LatencyText.Text = _outboundNote;
-            RemoteMachineRow.ToolTip = inbound ? null : outbound == OutboundSession.None ? (HasRecognizedTarget ? "Clique para pedir controle (só precisa do aceite)" : "Clique para vincular com o código") : outbound == OutboundSession.Connected ? "Clique para enviar mouse e teclado" : "Clique para cancelar o pedido";
             NoPeersState.Visibility = model.Other.Visible ? Visibility.Collapsed : Visibility.Visible;
             var hasTarget = target != null || legacyPeer;
             RemoteShortcutTargetText.Text = hasTarget ? (target != null && !string.IsNullOrWhiteSpace(target.DisplayName) ? target.DisplayName : "Máquina vinculada") : "Nenhuma máquina";

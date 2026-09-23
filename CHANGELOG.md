@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] - 2026-09-23
+
+### Changed
+
+- Default window size reduced by 20% (1251 × 805).
+
+### Fixed
+
+- Hovering some options no longer shows an empty white tooltip; tooltips are removed.
+
 ## [0.3.4] - 2026-09-23
 
 ### Changed
