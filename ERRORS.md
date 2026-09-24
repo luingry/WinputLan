@@ -235,3 +235,10 @@
 - Causas: sockets pendentes não eram fechados; timeout compartilhava o loop bloqueado de envio; fila cheia descartava KeyUp/MouseButtonUp; eventos não tinham geração de captura; Press ignorava a origem da primeira pressão; filtro não incluía MouseDelta.
 - Solução: prazo de 10 s para conexão/TLS e fechamento por cancelamento; watchdog independente com relógio monotônico; desconexão fail-safe na saturação; fila com epoch e checagem na escrita, foco/release/input serializados; auto-repeat preserva origem; MouseDelta limitado a 4 Hz. O receptor serializa injeção e limpeza, soltando também no próprio unfocus.
 - Prevenção: StabilityTests usa TCP/TLS local real, peer silencioso, escrita congestionada e gates controlados para testar cancelamento, timeout, reutilização da porta, descarte de eventos antigos e soltura após overflow. Testes Core cobrem repetição local e taxa de MouseDelta. Essa evidência não mede frequência de falhas ou latência física entre dois PCs.
+
+## 2026-09-24 - Corrida no teste de rejeição de certificado em CI
+
+- Sintoma: a primeira tentativa de release 0.3.14 falhou no teste CertificateSubstitutionProofDoesNotPromptAsync, após passar nas novas regressões; o envio da prova inválida lançou IOException/NetworkStream disposed.
+- Causa: o alvo recebe a prova, envia a negativa e fecha TCP antes de a continuação da escrita no controlador terminar. O teste exigia sucesso da escrita mesmo quando o encerramento era o resultado correto.
+- Solução: aceitar falha de escrita/cancelamento da sessão nesse envio específico e exigir o evento Offline com motivo access denied, além de continuar verificando ausência de popup. A versão pública segue como 0.3.15; a tag 0.3.14 da tentativa falha é preservada.
+- Prevenção: em testes de rejeição, afirmar o resultado remoto esperado; não depender da ordem entre fechamento remoto e conclusão local de WriteAsync.

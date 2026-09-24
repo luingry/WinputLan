@@ -42,7 +42,7 @@ UI, accessibility names, keyboard focus triggers, and generated direction
 assets are checked into the repo. Physical two-PC input acceptance, UIPI/UAC,
 and signed-update acceptance remain release-gate work.
 
-## Stability regressions (0.3.14)
+## Stability regressions (0.3.15)
 
 `StabilityTests` exercises inbound/outbound TLS cancellation, explicit disconnect,
 shutdown and handshake deadlines against silent TCP peers, then reuses the same

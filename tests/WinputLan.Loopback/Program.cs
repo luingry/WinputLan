@@ -92,6 +92,8 @@ namespace WinputLan.Loopback
             using (var targetPairing = new PairingCoordinator(target, targetConfig, targetCert, PairingRole.Target))
             {
                 var prompted = false; var challenge = new TaskCompletionSource<string>();
+                var rejected = new TaskCompletionSource<bool>();
+                target.StateChanged += (state, detail) => { if (state == PeerConnectionState.Offline && detail == "access denied") rejected.TrySetResult(true); };
                 targetPairing.AccessRequestReceived += _ => prompted = true;
                 controller.FrameReceived += frame => { if (frame.Type == FrameType.PairingConfirm) challenge.TrySetResult(System.Text.Encoding.UTF8.GetString(frame.Payload)); };
                 var listen = target.ListenOnceAsync(port, targetCert, null, true, token); await Task.Delay(50, token).ConfigureAwait(false);
@@ -104,7 +106,12 @@ namespace WinputLan.Loopback
                 var targetNonce = Convert.FromBase64String(parts[2]);
                 var substitutedTranscript = AccessProof.CanonicalTranscript(controllerConfig.DeviceId, targetConfig.DeviceId, CertificateManager.Fingerprint(controllerCert), "mitm-substituted-target-fingerprint", controllerNonce, targetNonce);
                 var proof = AccessProof.Create(targetPairing.AccessCode, substitutedTranscript, "request");
-                await controller.SendAsync(FrameType.PairingOffer, System.Text.Encoding.UTF8.GetBytes("proof|" + Convert.ToBase64String(proof)), token).ConfigureAwait(false);
+                // The target may receive/reject the proof and close TCP before the sender's write
+                // continuation runs. Require the explicit rejection, not a successful local write.
+                try { await controller.SendAsync(FrameType.PairingOffer, System.Text.Encoding.UTF8.GetBytes("proof|" + Convert.ToBase64String(proof)), token).ConfigureAwait(false); }
+                catch (IOException) { }
+                catch (OperationCanceledException) when (!token.IsCancellationRequested) { }
+                await WaitAsync(rejected.Task, token, "substituted certificate proof was not explicitly rejected").ConfigureAwait(false);
                 await WaitOfflineAsync(target, token).ConfigureAwait(false); await listen.ConfigureAwait(false);
                 if (prompted) throw new InvalidOperationException("Certificate-substitution proof reached target approval UI.");
             }
