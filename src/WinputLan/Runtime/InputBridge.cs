@@ -40,6 +40,8 @@ namespace WinputLan.Runtime
         private const uint LlmhfInjected = 0x01;
         // A single hook event never legitimately moves this far from the anchor; larger jumps are stale positions.
         private const int MaxDeltaPerEvent = 2000;
+        // Larger than any single-event motion in practice, small enough that the nudge off an edge is barely visible.
+        private const int AnchorEdgeMargin = 50;
         private readonly IInputSink _sink;
         private readonly IHotkeyChordDetector _hotkeyChordDetector;
         private readonly Func<HotkeyAction, bool> _hotkeyAction;
@@ -128,9 +130,9 @@ namespace WinputLan.Runtime
                 // Windows calls the most recently installed low-level hook first. Another wheel hook installed
                 // after ours (e.g. SmoothMice) would consume the wheel locally, so move ours back to the front.
                 RaiseMouseHook();
-                // Pin the local cursor at the primary screen centre: every hook position is then anchor + motion.
+                // Pin the local cursor where it is: every hook position is then anchor + motion.
                 NativeMethods.GetCursorPos(out _restore);
-                _anchor = new NativeMethods.POINT { X = NativeMethods.GetSystemMetrics(NativeMethods.SmCxScreen) / 2, Y = NativeMethods.GetSystemMetrics(NativeMethods.SmCyScreen) / 2 };
+                _anchor = AnchorFor(_restore);
                 NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
                 _routing.SetRemoteActive(true);
             }
@@ -139,6 +141,21 @@ namespace WinputLan.Runtime
                 _routing.SetRemoteActive(false);
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
             }
+        }
+
+        // Windows clamps hook positions to the screen, so motion towards an edge the cursor touches would be lost.
+        // Keep the cursor in place unless it is within AnchorEdgeMargin of its monitor's edge; then nudge it inward.
+        private static NativeMethods.POINT AnchorFor(NativeMethods.POINT cursor)
+        {
+            var info = new NativeMethods.MONITORINFO { Size = Marshal.SizeOf(typeof(NativeMethods.MONITORINFO)) };
+            var monitor = NativeMethods.MonitorFromPoint(cursor, NativeMethods.MonitorDefaultToNearest);
+            if (monitor == IntPtr.Zero || !NativeMethods.GetMonitorInfo(monitor, ref info)) return cursor;
+            var bounds = info.Monitor;
+            return new NativeMethods.POINT
+            {
+                X = Math.Max(bounds.Left + AnchorEdgeMargin, Math.Min(bounds.Right - 1 - AnchorEdgeMargin, cursor.X)),
+                Y = Math.Max(bounds.Top + AnchorEdgeMargin, Math.Min(bounds.Bottom - 1 - AnchorEdgeMargin, cursor.Y))
+            };
         }
 
         // Runs on the hook thread, which does not pump in between, so no event is seen twice or missed.
@@ -398,6 +415,13 @@ namespace WinputLan.Runtime
         [DllImport("user32.dll")] internal static extern IntPtr DispatchMessage(ref MSG msg);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool PostThreadMessage(uint threadId, int msg, IntPtr wParam, IntPtr lParam);
 
+        internal const uint MonitorDefaultToNearest = 2;
+
+        [DllImport("user32.dll")] internal static extern IntPtr MonitorFromPoint(POINT point, uint flags);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+
+        [StructLayout(LayoutKind.Sequential)] internal struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+        [StructLayout(LayoutKind.Sequential)] internal struct MONITORINFO { public int Size; public RECT Monitor; public RECT Work; public uint Flags; }
         [StructLayout(LayoutKind.Sequential)] internal struct POINT { public int X; public int Y; }
         [StructLayout(LayoutKind.Sequential)] internal struct MSG { public IntPtr Hwnd; public int Message; public IntPtr WParam; public IntPtr LParam; public uint Time; public POINT Point; }
         [StructLayout(LayoutKind.Sequential)] internal struct KbdLlHookStruct { public uint VirtualKey; public uint ScanCode; public uint Flags; public uint Time; public IntPtr ExtraInfo; }

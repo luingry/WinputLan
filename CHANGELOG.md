@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.11] - 2026-09-24
+
+### Changed
+
+- While input goes to the other PC, the controller's mouse cursor stays where it was instead of jumping to the centre of the main screen. Only a cursor within 50 px of a monitor edge is nudged inward, so motion towards that edge still reaches the other PC.
+
 ## [0.3.10] - 2026-09-24
 
 ### Fixed

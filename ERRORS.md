@@ -1,5 +1,13 @@
 # Errors and prevention
 
+## 2026-09-24 - Cursor do controlador salta para o centro da tela durante a sessão remota
+
+- Sintoma: ao alternar para o PC 2, o cursor do PC 1 pulava para o centro do monitor principal e ficava visível lá.
+- Causa raiz: a âncora usada para medir deltas era fixa no centro da tela principal. O Windows limita as posições do hook às bordas da tela, então um cursor encostado numa borda perderia o movimento naquela direção.
+- Solução: a âncora é a posição atual do cursor, empurrada para dentro só quando está a menos de 50 px da borda do seu monitor (`AnchorFor`).
+- Abordagem descartada: ocultar o cursor com uma janela topmost/layered com cursor em branco. O formato só muda quando a thread dona lê a mensagem de mouse da janela (`SetCursor` antes disso é ignorado), o que gerava alguns frames de seta visível no centro. Além disso, `ShowCursor` não oculta o cursor do sistema, e `SetSystemCursor` deixaria o cursor invisível se o app caísse.
+- Prevenção: ao validar uma instalação local, confira o hash de `C:\Program Files\Winput LAN\WinputLan.exe` contra o build. Um segundo instalador aberto pelo Explorer pode não rodar, e o teste acaba feito na versão antiga.
+
 ## 2026-09-24 - Scroll fica no PC controlador com SmoothMice aberto
 
 - Sintoma: controlando o PC 2, a roda do mouse rolava a janela local do PC 1 em vez de ir para o alvo.
