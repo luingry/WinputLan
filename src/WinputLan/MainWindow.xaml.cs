@@ -98,6 +98,9 @@ namespace WinputLan
 
         private void Window_SourceInitialized(object sender, EventArgs e)
         {
+            // Prepare the recovery process before any control switch so process startup cannot
+            // briefly show Windows' application-starting cursor at the moment of handoff.
+            CursorVisibilityGuard.Shared.Arm();
             try
             {
                 _hotkeys = new GlobalHotkeyService(HwndSource.FromHwnd(new WindowInteropHelper(this).Handle));
@@ -166,6 +169,7 @@ namespace WinputLan
         {
             if (!_backgroundLifecycle.TryBeginCleanup()) return;
             _capture?.Dispose();
+            CursorVisibilityGuard.Shared.Dispose();
             _inputRouter?.Dispose();
             _listenerInputReceiver?.Dispose();
             _inputSink.ReleaseAll();

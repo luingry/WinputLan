@@ -20,7 +20,7 @@ pwsh -File scripts/finalize.ps1 -Configuration Release
 pwsh -File scripts/validate-release.ps1
 ```
 
-The finalizer builds/tests, compiles the unsigned Inno Setup installer, writes its SHA-256, and signs the deterministic OTA manifest. The published assets are the setup executable, `update-manifest.json`, `SHA256.json`, and release notes.
+The finalizer builds/tests, compiles the unsigned Inno Setup installer, writes its SHA-256, signs the deterministic OTA manifest, and verifies that signature against the public key pinned in the app. A local private key that does not match the pinned key fails this check; use the matching key or let the GitHub workflow sign with its configured secret. The published assets are the setup executable, `update-manifest.json`, `SHA256.json`, and release notes.
 
 ## GitHub release
 

@@ -14,6 +14,12 @@ namespace WinputLan
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            if (e.Args.Length > 0 && string.Equals(e.Args[0], CursorVisibilityGuard.HelperArgument, StringComparison.Ordinal))
+            {
+                CursorVisibilityGuard.RunHelper(e.Args);
+                Shutdown();
+                return;
+            }
             base.OnStartup(e);
             var appDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan");
             ConfigStore = new AppConfigStore(appDirectory);

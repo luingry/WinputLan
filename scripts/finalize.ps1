@@ -31,6 +31,15 @@ try {
     $manifest.Signature = [Convert]::ToBase64String($rsa.SignData([Text.Encoding]::UTF8.GetBytes($payload), [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1))
 }
 finally { $rsa.Dispose() }
+$coreAssembly = Join-Path $root "src/WinputLan.Core/bin/$Configuration/netstandard2.0/WinputLan.Core.dll"
+Add-Type -Path $coreAssembly
+$releaseManifest = [WinputLan.Core.ReleaseManifest]::new()
+foreach ($field in @('Version', 'AssetName', 'AssetUrl', 'Sha256', 'NotesUrl', 'Algorithm', 'KeyId', 'Signature')) {
+    $releaseManifest.$field = $manifest[$field]
+}
+if (-not [WinputLan.Core.ReleaseManifestSignature]::Verify($releaseManifest)) {
+    throw 'OTA private key does not match the public key pinned in WinputLan.Core. Refusing to package an invalid update manifest.'
+}
 $hashes = Get-ChildItem $out -File | Sort-Object Name | ForEach-Object { $h = Get-FileHash $_.FullName -Algorithm SHA256; [pscustomobject]@{ name=$_.Name; sha256=$h.Hash.ToLowerInvariant(); size=$_.Length } }
 $hashes | ConvertTo-Json -Depth 3 | Set-Content (Join-Path $out 'SHA256.json') -Encoding UTF8
 @("Winput LAN $version", "Generated $(Get-Date -Format o)", "Files: $($hashes.Count)") | Set-Content (Join-Path $out 'MANIFEST.txt') -Encoding UTF8

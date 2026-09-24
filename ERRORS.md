@@ -1,11 +1,26 @@
 # Errors and prevention
 
+## 2026-09-24 - Finalizador local assina manifesto com chave não fixada no aplicativo
+
+- Sintoma: o pacote local de 0.3.13 tinha SHA-256 correto, mas `ReleaseManifestSignature.Verify` rejeitou sua assinatura.
+- Causa raiz: o PEM privado local em `%LOCALAPPDATA%\WinputLan\release` corresponde a uma chave pública diferente da fixada em `WinputLan.Core`. O segredo do CI não mudou desde antes do release 0.3.11, cujo manifesto publicado valida com a chave fixada.
+- Solução: `scripts/finalize.ps1` agora verifica a assinatura contra a chave pública fixada antes de escrever o manifesto. Publicar pelo workflow, que usa o segredo do CI, e verificar o manifesto publicado antes de declarar o release concluído.
+- Prevenção: validar assinatura e hash do artefato gerado, não apenas a conclusão do script de assinatura; nunca substituir a chave fixada para acomodar um PEM local divergente.
+
+## 2026-09-24 - Ícone de carregamento aparece por um instante ao trocar para o PC remoto
+
+- Sintoma: a ocultação do cursor funcionava, mas o Windows mostrava brevemente o ponteiro de aplicativo iniciando a cada troca de controle.
+- Causa raiz: `CursorVisibilityGuard.TryHide` iniciava um segundo `WinputLan.exe` a cada ativação remota. O Windows exibe feedback de inicialização para processos GUI.
+- Solução: o auxiliar é preparado uma vez na abertura do app e reutilizado nas trocas; um evento `active` informa se há cursor oculto, para que o auxiliar só restaure o esquema após falha quando necessário.
+- Prevenção: qualquer processo auxiliar usado no caminho de troca deve estar pronto antes desse caminho. Smoke local confirmou que duas trocas usam o mesmo PID auxiliar; a ausência visual do flash ainda depende de reteste no PC controlador.
+
 ## 2026-09-24 - Cursor do controlador salta para o centro da tela durante a sessão remota
 
 - Sintoma: ao alternar para o PC 2, o cursor do PC 1 pulava para o centro do monitor principal e ficava visível lá.
 - Causa raiz: a âncora usada para medir deltas era fixa no centro da tela principal. O Windows limita as posições do hook às bordas da tela, então um cursor encostado numa borda perderia o movimento naquela direção.
 - Solução: a âncora é a posição atual do cursor, empurrada para dentro só quando está a menos de 50 px da borda do seu monitor (`AnchorFor`).
-- Abordagem descartada: ocultar o cursor com uma janela topmost/layered com cursor em branco. O formato só muda quando a thread dona lê a mensagem de mouse da janela (`SetCursor` antes disso é ignorado), o que gerava alguns frames de seta visível no centro. Além disso, `ShowCursor` não oculta o cursor do sistema, e `SetSystemCursor` deixaria o cursor invisível se o app caísse.
+- Abordagens descartadas: janela topmost/layered com cursor em branco (a thread dona só muda o formato ao ler a mensagem de mouse, deixando alguns frames de seta visível) e `ShowCursor` (não ocultou o cursor do sistema neste fluxo).
+- Evolução em 0.3.12: `SetSystemCursor` aplica um cursor monocromático transparente aos tipos do sistema durante o controle remoto; `SPI_SETCURSORS` recarrega o esquema ao voltar. Um processo auxiliar inicia antes da troca, confirma prontidão e restaura o esquema se o processo controlador terminar sem limpeza; o controlador também monitora a vida do auxiliar. Validação local confirmou máscara transparente, restauração normal e recuperação após término forçado do controlador de teste. Ainda requer prova visual em dois PCs para eventuais cursores personalizados por outros apps.
 - Prevenção: ao validar uma instalação local, confira o hash de `C:\Program Files\Winput LAN\WinputLan.exe` contra o build. Um segundo instalador aberto pelo Explorer pode não rodar, e o teste acaba feito na versão antiga.
 
 ## 2026-09-24 - Scroll fica no PC controlador com SmoothMice aberto

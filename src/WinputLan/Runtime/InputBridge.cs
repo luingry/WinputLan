@@ -47,6 +47,7 @@ namespace WinputLan.Runtime
         private readonly Func<HotkeyAction, bool> _hotkeyAction;
         private readonly HashSet<ushort> _suppressedHotkeyUps = new HashSet<ushort>();
         private readonly InputRoutingState _routing = new InputRoutingState();
+        private readonly CursorVisibilityGuard _cursorVisibility = CursorVisibilityGuard.Shared;
         private NativeMethods.HookProc _keyboardProc;
         private NativeMethods.HookProc _mouseProc;
         private IntPtr _keyboardHook;
@@ -135,10 +136,12 @@ namespace WinputLan.Runtime
                 _anchor = AnchorFor(_restore);
                 NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
                 _routing.SetRemoteActive(true);
+                _cursorVisibility.TryHide();
             }
             else
             {
                 _routing.SetRemoteActive(false);
+                _cursorVisibility.Show();
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
             }
         }

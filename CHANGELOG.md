@@ -5,6 +5,18 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.13] - 2026-09-24
+
+### Fixed
+
+- Prepare and reuse the cursor recovery process when Winput LAN opens, so switching control no longer starts a GUI process that briefly triggers Windows' working-in-background pointer.
+
+## [0.3.12] - 2026-09-24
+
+### Changed
+
+- Hide the controller PC's system cursor while input goes to the other PC, then reload the configured cursor scheme when control returns. A separate guard process also restores the cursors if the controller exits unexpectedly.
+
 ## [0.3.11] - 2026-09-24
 
 ### Changed
