@@ -10,6 +10,7 @@ namespace WinputLan.Runtime
         private readonly PeerTransport _transport;
         private readonly IInputSink _sink;
         private bool _disposed;
+        private readonly object _inputGate = new object();
         private int _lastAckTick;
         // Third safeguard: input is injected only while the controller has announced focus on this PC.
         private volatile bool _focused;
@@ -34,11 +35,22 @@ namespace WinputLan.Runtime
             _disposed = true;
             _transport.FrameReceived -= Transport_FrameReceived;
             _transport.StateChanged -= Transport_StateChanged;
-            ReleaseAll();
+            lock (_inputGate) { _focused = false; ReleaseAll(); }
         }
 
         private void Transport_FrameReceived(Frame frame)
         {
+            // A disconnect must release inputs after an in-flight injection has finished, never before.
+            long? ack = null;
+            lock (_inputGate) { if (!_disposed) HandleFrame(frame, out ack); }
+            // Don't acquire the transport gate while holding the injection gate: state callbacks
+            // can originate under the transport gate during connection publication.
+            if (ack.HasValue) _ = SendAckAsync(ack.Value);
+        }
+
+        private void HandleFrame(Frame frame, out long? ack)
+        {
+            ack = null;
             if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll))
             {
                 InputAudited?.Invoke(InputKind.KeyDown, "dropped-direction");
@@ -46,7 +58,7 @@ namespace WinputLan.Runtime
             }
             if (frame.Type == FrameType.ControlFocus)
             {
-                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1) { _focused = frame.Payload[0] == 1; FocusChanged?.Invoke(_focused); }
+                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1) { _focused = frame.Payload[0] == 1; if (!_focused) ReleaseAll(); FocusChanged?.Invoke(_focused); }
                 return;
             }
             if (frame.Type == FrameType.ReleaseAll)
@@ -64,7 +76,7 @@ namespace WinputLan.Runtime
                 InputAudited?.Invoke(input.Kind, accepted ? "received" : "dropped-sink");
                 var tick = Environment.TickCount;
                 var motion = input.Kind == InputKind.MouseDelta || input.Kind == InputKind.MouseMove;
-                if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; _ = SendAckAsync(input.TimestampUtcTicks); }
+                if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; ack = input.TimestampUtcTicks; }
             }
             catch { InputAudited?.Invoke(InputKind.KeyDown, "dropped-invalid"); }
         }
@@ -78,8 +90,11 @@ namespace WinputLan.Runtime
         private void Transport_StateChanged(PeerConnectionState state, string detail)
         {
             // Every session starts unfocused; only an explicit ControlFocus(1) opens the gate.
-            _focused = false;
-            if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
+            lock (_inputGate)
+            {
+                _focused = false;
+                if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
+            }
         }
 
         private void ReleaseAll()

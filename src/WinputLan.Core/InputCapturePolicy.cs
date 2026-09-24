@@ -34,6 +34,9 @@ namespace WinputLan.Core
         {
             lock (_gate)
             {
+                // Auto-repeat belongs to the machine that received the original press.
+                if (_localDown.Contains(id)) return InputRoute.Local;
+                if (_remoteDown.Contains(id)) return InputRoute.Remote;
                 if (_remoteActive) { _remoteDown.Add(id); return InputRoute.Remote; }
                 _localDown.Add(id);
                 return InputRoute.Local;

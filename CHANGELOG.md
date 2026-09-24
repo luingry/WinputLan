@@ -5,6 +5,22 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.14] - 2026-09-24
+
+### Fixed
+
+- Bound TCP/TLS connection attempts to 10 seconds and close pending sockets on cancellation, disconnection, supersession or shutdown, allowing the listener to recover.
+- Detect heartbeat timeout independently of blocked input writes and use a monotonic clock, so congestion cannot leave a dead session marked connected.
+- Close an overloaded input session and release remote keys/buttons instead of silently discarding their release events.
+- Bind queued inputs to their capture activation and serialize focus/release/input writes, preventing old commands from crossing rapid local/remote switches.
+- Keep held-key auto-repeat on the PC that received the original press.
+- Rate-limit relative mouse motion diagnostics to four events per second, including failed injection reports.
+- Serialize receiver cleanup with input injection so disconnect releases follow any in-flight key/button press.
+
+### Tests
+
+- Add TLS cancellation/timeout/retry, blocked-write heartbeat, rapid focus switching, queue saturation and held-key repeat regressions.
+
 ## [0.3.13] - 2026-09-24
 
 ### Fixed

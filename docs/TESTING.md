@@ -41,3 +41,17 @@ environment. Full screenshot capture is environment-dependent; the source
 UI, accessibility names, keyboard focus triggers, and generated direction
 assets are checked into the repo. Physical two-PC input acceptance, UIPI/UAC,
 and signed-update acceptance remain release-gate work.
+
+## Stability regressions (0.3.14)
+
+`StabilityTests` exercises inbound/outbound TLS cancellation, explicit disconnect,
+shutdown and handshake deadlines against silent TCP peers, then reuses the same
+listener port. A TLS peer that stops reading proves that the heartbeat watchdog
+closes a congested connection independently of the blocked writer.
+
+Controlled gates exercise an input already removed from the queue during a rapid
+remote/local/remote switch, then require fresh input to arrive without the stale
+press. Queue saturation while a key is held must disconnect and release the key
+without passing its dropped release through the local hook. These tests use a
+recording sink and never inject physical input. Core tests also assert held-key
+repeat ownership and four-Hz auditing of relative movement.

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Security;
@@ -20,13 +21,17 @@ namespace WinputLan.Runtime
         private readonly TimeSpan _heartbeatInterval;
         private readonly TimeSpan _heartbeatTimeout;
         private readonly bool _respondToHeartbeats;
+        private readonly TimeSpan _handshakeTimeout;
+        private readonly CancellationTokenSource _lifetimeCts = new CancellationTokenSource();
+        private TcpClient _pendingClient;
+        private CancellationTokenSource _pendingCts;
         private TcpClient _client;
         private SslStream _stream;
         private CancellationTokenSource _connectionCts;
         private long _sequence;
         private long _generation;
         private ulong _lastReceivedSequence;
-        private DateTime _lastHeartbeatAckUtc;
+        private long _lastHeartbeatAckTick;
         private bool _disposed;
         private volatile bool _allowsInputSend;
         private volatile bool _allowsInputReceive;
@@ -34,8 +39,12 @@ namespace WinputLan.Runtime
         public PeerTransport() : this(TimeSpan.FromSeconds(3), TimeSpan.FromSeconds(9), true) { }
         public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout) : this(heartbeatInterval, heartbeatTimeout, true) { }
         public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout, bool respondToHeartbeats)
+            : this(heartbeatInterval, heartbeatTimeout, respondToHeartbeats, TimeSpan.FromSeconds(10)) { }
+        public PeerTransport(TimeSpan heartbeatInterval, TimeSpan heartbeatTimeout, bool respondToHeartbeats, TimeSpan handshakeTimeout)
         {
             if (heartbeatInterval <= TimeSpan.Zero || heartbeatTimeout <= heartbeatInterval) throw new ArgumentOutOfRangeException("heartbeatInterval");
+            if (handshakeTimeout <= TimeSpan.Zero) throw new ArgumentOutOfRangeException("handshakeTimeout");
+            _handshakeTimeout = handshakeTimeout;
             _heartbeatInterval = heartbeatInterval;
             _heartbeatTimeout = heartbeatTimeout;
             _respondToHeartbeats = respondToHeartbeats;
@@ -57,22 +66,24 @@ namespace WinputLan.Runtime
             if (port < 1 || port > 65535) throw new ArgumentOutOfRangeException("port");
             var lease = BeginConnectionAttempt(pairingMode);
             var client = new TcpClient { NoDelay = true };
+            using (var attempt = RegisterAttempt(client, lease, cancellationToken))
+            using (attempt.Token.Register(() => CloseTransport(client)))
             try
             {
-                cancellationToken.ThrowIfCancellationRequested();
+                attempt.Token.ThrowIfCancellationRequested();
                 await client.ConnectAsync(host, port).ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
+                attempt.Token.ThrowIfCancellationRequested();
                 var stream = new SslStream(client.GetStream(), false, (sender, certificate, chain, errors) => ValidateCertificate(certificate, pinnedFingerprint, pairingMode));
                 await stream.AuthenticateAsClientAsync(host, new X509CertificateCollection { localCertificate }, SslProtocols.Tls12, false).ConfigureAwait(false);
-                cancellationToken.ThrowIfCancellationRequested();
+                attempt.Token.ThrowIfCancellationRequested();
                 long generation;
                 if (!TryStartConnection(client, stream, pairingMode, cancellationToken, true, lease, out generation)) throw new OperationCanceledException("Connection attempt was superseded.", cancellationToken);
             }
-            catch (OperationCanceledException)
+            catch (Exception) when (attempt.IsCancellationRequested)
             {
                 CloseTransport(client);
                 CancelConnectionAttempt(lease);
-                throw;
+                throw new OperationCanceledException("Connection cancelled or handshake timed out.", attempt.Token);
             }
             catch
             {
@@ -80,6 +91,7 @@ namespace WinputLan.Runtime
                 FailConnectionAttempt(lease);
                 throw;
             }
+            finally { ClearAttempt(client); }
         }
 
         // Occupies the call while its accepted peer is alive, allowing a caller to restart listening safely.
@@ -87,42 +99,95 @@ namespace WinputLan.Runtime
         {
             var listener = new TcpListener(IPAddress.Any, port);
             listener.Start(1);
+            using (var lifetime = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _lifetimeCts.Token))
+            using (lifetime.Token.Register(listener.Stop))
             try
             {
                 SetState(PeerConnectionState.Connecting, "Aguardando conexão");
-                var acceptTask = listener.AcceptTcpClientAsync();
-                var completed = await Task.WhenAny(acceptTask, Task.Delay(Timeout.Infinite, cancellationToken)).ConfigureAwait(false);
-                if (completed != acceptTask) throw new OperationCanceledException(cancellationToken);
-                var client = await acceptTask.ConfigureAwait(false);
-                client.NoDelay = true;
-                var stream = new SslStream(client.GetStream(), false, (sender, certificate, chain, errors) => ValidateCertificate(certificate, pinnedFingerprint, pairingMode));
-                await stream.AuthenticateAsServerAsync(localCertificate, true, SslProtocols.Tls12, false).ConfigureAwait(false);
-                long generation;
-                if (!TryStartConnection(client, stream, pairingMode, cancellationToken, false, 0, out generation)) throw new OperationCanceledException(cancellationToken);
-                CancellationToken receiveToken;
-                lock (_gate) receiveToken = _connectionCts.Token;
-                await ReceiveLoopAsync(stream, generation, receiveToken).ConfigureAwait(false);
+                using (var client = await listener.AcceptTcpClientAsync().ConfigureAwait(false))
+                {
+                    lifetime.Token.ThrowIfCancellationRequested();
+                    var lease = BeginConnectionAttempt(pairingMode);
+                    client.NoDelay = true;
+                    long generation;
+                    SslStream stream;
+                    using (var attempt = RegisterAttempt(client, lease, lifetime.Token))
+                    using (attempt.Token.Register(() => CloseTransport(client)))
+                    {
+                        try
+                        {
+                            stream = new SslStream(client.GetStream(), false, (sender, certificate, chain, errors) => ValidateCertificate(certificate, pinnedFingerprint, pairingMode));
+                            await stream.AuthenticateAsServerAsync(localCertificate, true, SslProtocols.Tls12, false).ConfigureAwait(false);
+                            attempt.Token.ThrowIfCancellationRequested();
+                            if (!TryStartConnection(client, stream, pairingMode, lifetime.Token, false, lease, out generation)) throw new OperationCanceledException(lifetime.Token);
+                        }
+                        catch
+                        {
+                            FailConnectionAttempt(lease);
+                            // A timed-out peer must not stop the outer listener retry loop.
+                            if (!lifetime.IsCancellationRequested) throw new IOException("TLS handshake failed, cancelled or timed out.");
+                            throw new OperationCanceledException(lifetime.Token);
+                        }
+                        finally { ClearAttempt(client); }
+                    }
+                    CancellationToken receiveToken;
+                    lock (_gate) { if (generation != _generation || _connectionCts == null) return; receiveToken = _connectionCts.Token; }
+                    await ReceiveLoopAsync(stream, generation, receiveToken).ConfigureAwait(false);
+                }
             }
+            catch (Exception) when (lifetime.IsCancellationRequested) { throw new OperationCanceledException(lifetime.Token); }
             finally { listener.Stop(); }
+        }
+
+        private CancellationTokenSource RegisterAttempt(TcpClient client, long lease, CancellationToken token)
+        {
+            var attempt = CancellationTokenSource.CreateLinkedTokenSource(token, _lifetimeCts.Token);
+            attempt.CancelAfter(_handshakeTimeout);
+            lock (_gate)
+            {
+                if (_disposed || lease != _generation) { attempt.Dispose(); CloseTransport(client); throw new OperationCanceledException(token); }
+                _pendingClient = client;
+                _pendingCts = attempt;
+            }
+            return attempt;
+        }
+
+        private void ClearAttempt(TcpClient client)
+        {
+            lock (_gate) if (ReferenceEquals(_pendingClient, client)) { _pendingClient = null; _pendingCts = null; }
         }
 
         public async Task SendAsync(FrameType type, byte[] payload, CancellationToken cancellationToken)
         {
+            await SendIfCurrentAsync(type, payload, null, cancellationToken).ConfigureAwait(false);
+        }
+
+        internal async Task<bool> SendIfCurrentAsync(FrameType type, byte[] payload, Func<bool> isCurrent, CancellationToken cancellationToken)
+        {
             if (type == FrameType.Input && !_allowsInputSend) throw new InvalidOperationException("This session is not permitted to send input.");
             SslStream stream;
-            lock (_gate) stream = _stream;
+            CancellationToken connectionToken;
+            long generation;
+            lock (_gate) { stream = _stream; generation = _generation; connectionToken = _connectionCts == null ? CancellationToken.None : _connectionCts.Token; }
             if (stream == null) throw new IOException("Peer is not connected.");
-            await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
-            // The sequence is taken inside the send gate so wire order always matches sequence order;
-            // numbering first let concurrent senders (heartbeat, input, ACK) reach the wire out of order,
-            // which the receiver rejects by closing the connection.
-            // SslStream.WriteAsync commits the complete TLS record; FlushAsync added a scheduler hop without improving delivery.
-            try
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectionToken))
             {
-                var bytes = FrameCodec.Encode(type, unchecked((ulong)Interlocked.Increment(ref _sequence)), payload);
-                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                await _sendGate.WaitAsync(linked.Token).ConfigureAwait(false);
+                // The sequence is taken inside the send gate so wire order always matches sequence order;
+                // numbering first let concurrent senders (heartbeat, input, ACK) reach the wire out of order,
+                // which the receiver rejects by closing the connection.
+                // SslStream.WriteAsync commits the complete TLS record; FlushAsync added a scheduler hop without improving delivery.
+                try
+                {
+                    lock (_gate) if (generation != _generation || !ReferenceEquals(stream, _stream)) throw new IOException("Connection was superseded.");
+                    if (isCurrent != null && !isCurrent()) return false;
+                    if (type == FrameType.Input && !_allowsInputSend) throw new IOException("Input direction changed.");
+                    var bytes = FrameCodec.Encode(type, unchecked((ulong)Interlocked.Increment(ref _sequence)), payload);
+                    await stream.WriteAsync(bytes, 0, bytes.Length, linked.Token).ConfigureAwait(false);
+                    return true;
+                }
+                finally { _sendGate.Release(); }
             }
-            finally { _sendGate.Release(); }
         }
 
         public void MarkPaired() { if (State == PeerConnectionState.Pairing) SetState(PeerConnectionState.Connected, "TLS ativo · peer pinned"); }
@@ -137,14 +202,20 @@ namespace WinputLan.Runtime
         {
             TcpClient client;
             CancellationTokenSource cts;
+            TcpClient pending;
+            CancellationTokenSource pendingCts;
             lock (_gate)
             {
                 _generation++;
                 client = _client; cts = _connectionCts;
+                pending = _pendingClient; pendingCts = _pendingCts; _pendingClient = null; _pendingCts = null;
                 _client = null; _stream = null; _connectionCts = null; ObservedRemoteFingerprint = null; RemoteEndpoint = null;
                 _allowsInputSend = false; _allowsInputReceive = false;
             }
-            if (cts != null) cts.Cancel();
+            CancelSafely(pendingCts);
+            CloseTransport(pending);
+            CancelSafely(cts);
+            cts?.Dispose();
             CloseTransport(client);
             SetState(PeerConnectionState.Offline, reason ?? "desconectado");
         }
@@ -153,23 +224,30 @@ namespace WinputLan.Runtime
         {
             if (_disposed) return;
             _disposed = true;
+            _lifetimeCts.Cancel();
             Disconnect("encerrado");
-            _sendGate.Dispose();
+            // In-flight writes still release the semaphore during cancellation.
         }
 
         private long BeginConnectionAttempt(bool pairingMode)
         {
             TcpClient client;
             CancellationTokenSource cts;
+            TcpClient pending;
+            CancellationTokenSource pendingCts;
             long lease;
             lock (_gate)
             {
                 lease = ++_generation;
                 client = _client; cts = _connectionCts;
+                pending = _pendingClient; pendingCts = _pendingCts; _pendingClient = null; _pendingCts = null;
                 _client = null; _stream = null; _connectionCts = null; ObservedRemoteFingerprint = null; RemoteEndpoint = null;
                 _allowsInputSend = false; _allowsInputReceive = false;
             }
-            if (cts != null) cts.Cancel();
+            CancelSafely(pendingCts);
+            CloseTransport(pending);
+            CancelSafely(cts);
+            cts?.Dispose();
             CloseTransport(client);
             SetStateForLease(lease, pairingMode ? PeerConnectionState.Pairing : PeerConnectionState.Connecting, "Conectando");
             return lease;
@@ -205,7 +283,9 @@ namespace WinputLan.Runtime
                 if (_disposed || cancellationToken.IsCancellationRequested || (lease != 0 && lease != _generation)) { generation = 0; return false; }
                 _client = client; _stream = stream;
                 _connectionCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                _lastReceivedSequence = 0; _lastHeartbeatAckUtc = DateTime.UtcNow;
+                // Framework stream reads/writes cannot reliably be cancelled without closing TCP.
+                _connectionCts.Token.Register(() => CloseTransport(client));
+                _lastReceivedSequence = 0; _lastHeartbeatAckTick = Stopwatch.GetTimestamp();
                 ObservedRemoteFingerprint = observed; RemoteEndpoint = client.Client.RemoteEndPoint == null ? null : client.Client.RemoteEndPoint.ToString(); generation = lease == 0 ? ++_generation : lease;
                 _allowsInputSend = false; _allowsInputReceive = false;
                 token = _connectionCts.Token;
@@ -214,6 +294,7 @@ namespace WinputLan.Runtime
             else if (!SetStateForLease(lease, pairingMode ? PeerConnectionState.Pairing : PeerConnectionState.Connected, "TLS ativo")) return false;
             var publishedGeneration = generation;
             _ = Task.Run(() => RunHeartbeatAsync(publishedGeneration, token));
+            _ = Task.Run(() => WatchHeartbeatAsync(publishedGeneration, token));
             if (receiveInBackground) _ = Task.Run(() => ReceiveLoopAsync(stream, publishedGeneration, token));
             return true;
         }
@@ -225,14 +306,27 @@ namespace WinputLan.Runtime
                 while (!cancellationToken.IsCancellationRequested)
                 {
                     await Task.Delay(_heartbeatInterval, cancellationToken).ConfigureAwait(false);
-                    DateTime lastAck;
-                    lock (_gate) { if (generation != _generation) return; lastAck = _lastHeartbeatAckUtc; }
-                    if (DateTime.UtcNow - lastAck > _heartbeatTimeout) { EndGeneration(generation, "heartbeat timeout", true); return; }
+                    lock (_gate) if (generation != _generation) return;
                     await SendAsync(FrameType.Heartbeat, new byte[0], cancellationToken).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException) { }
             catch { EndGeneration(generation, "heartbeat send failed", true); }
+        }
+
+        private async Task WatchHeartbeatAsync(long generation, CancellationToken token)
+        {
+            try
+            {
+                while (true)
+                {
+                    await Task.Delay(_heartbeatInterval, token).ConfigureAwait(false);
+                    long lastAck;
+                    lock (_gate) { if (generation != _generation) return; lastAck = _lastHeartbeatAckTick; }
+                    if ((Stopwatch.GetTimestamp() - lastAck) / (double)Stopwatch.Frequency > _heartbeatTimeout.TotalSeconds) { EndGeneration(generation, "heartbeat timeout", true); return; }
+                }
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         }
 
         private async Task ReceiveLoopAsync(SslStream stream, long generation, CancellationToken cancellationToken)
@@ -249,7 +343,7 @@ namespace WinputLan.Runtime
                         _lastReceivedSequence = frame.Sequence;
                     }
                     if (frame.Type == FrameType.Heartbeat && _respondToHeartbeats) await SendAsync(FrameType.HeartbeatAck, new byte[0], cancellationToken).ConfigureAwait(false);
-                    else if (frame.Type == FrameType.HeartbeatAck) { lock (_gate) if (generation == _generation) _lastHeartbeatAckUtc = DateTime.UtcNow; }
+                    else if (frame.Type == FrameType.HeartbeatAck) { lock (_gate) if (generation == _generation) _lastHeartbeatAckTick = Stopwatch.GetTimestamp(); }
                     else FrameReceived?.Invoke(frame);
                 }
             }
@@ -272,7 +366,8 @@ namespace WinputLan.Runtime
                 _client = null; _stream = null; _connectionCts = null; ObservedRemoteFingerprint = null; RemoteEndpoint = null;
                 _allowsInputSend = false; _allowsInputReceive = false;
             }
-            if (cts != null) cts.Cancel();
+            CancelSafely(cts);
+            cts?.Dispose();
             CloseTransport(client);
             if (faulted) SetState(PeerConnectionState.Faulted, detail);
             SetState(PeerConnectionState.Offline, detail);
@@ -298,5 +393,6 @@ namespace WinputLan.Runtime
         private void SetStateLocked(PeerConnectionState state, string detail) { State = state; StateDetail = detail; StateChanged?.Invoke(state, detail); }
         private void SetState(PeerConnectionState state, string detail) { State = state; StateDetail = detail; StateChanged?.Invoke(state, detail); }
         private static void CloseTransport(TcpClient client) { try { if (client != null) client.Close(); } catch { } }
+        private static void CancelSafely(CancellationTokenSource cts) { try { cts?.Cancel(); } catch (ObjectDisposedException) { } }
     }
 }

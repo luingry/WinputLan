@@ -228,3 +228,10 @@
 - **Causa:** o hook capturava `LLKHF_EXTENDED` em `InputEvent.Flags`, mas o `SendInputSink` injetava só `KEYEVENTF_KEYUP`, descartando `KEYEVENTF_EXTENDEDKEY`. Sem ele, o Windows trata essas teclas como as do teclado numérico; com Num Lock ligado, injeta um Shift solto falso em volta delas e a seleção vira movimento simples.
 - **Solução:** `KeyInjection.SendInputFlags` (Core) converte o bit estendido do hook em `KEYEVENTF_EXTENDEDKEY`; o fail-safe `ReleaseAll` guarda as flags de cada tecla pressionada para soltá-la com o mesmo bit.
 - **Prevenção:** toda injeção de teclado deve preservar o bit estendido; o teste `extended keys keep their flag through injection` cobre o mapeamento e a passagem pelo fio.
+
+## 2026-09-24 - Falhas de estabilidade sob congestionamento e troca de foco (0.3.14)
+
+- Sintomas: negociação TLS presa após cancelamento; sessão indicada como conectada com envio travado; solturas perdidas quando a fila enche; tecla antiga enviada depois de remoto/local/remoto; repetição de tecla dividida entre PCs; logging excessivo do mouse relativo.
+- Causas: sockets pendentes não eram fechados; timeout compartilhava o loop bloqueado de envio; fila cheia descartava KeyUp/MouseButtonUp; eventos não tinham geração de captura; Press ignorava a origem da primeira pressão; filtro não incluía MouseDelta.
+- Solução: prazo de 10 s para conexão/TLS e fechamento por cancelamento; watchdog independente com relógio monotônico; desconexão fail-safe na saturação; fila com epoch e checagem na escrita, foco/release/input serializados; auto-repeat preserva origem; MouseDelta limitado a 4 Hz. O receptor serializa injeção e limpeza, soltando também no próprio unfocus.
+- Prevenção: StabilityTests usa TCP/TLS local real, peer silencioso, escrita congestionada e gates controlados para testar cancelamento, timeout, reutilização da porta, descarte de eventos antigos e soltura após overflow. Testes Core cobrem repetição local e taxa de MouseDelta. Essa evidência não mede frequência de falhas ou latência física entre dois PCs.

@@ -27,6 +27,7 @@ namespace WinputLan.Loopback
                 {
                     var targetCertificate = new CertificateManager(Path.Combine(root, "target"), new DpapiSecretProtector()).LoadOrCreate();
                     var controllerCertificate = new CertificateManager(Path.Combine(root, "controller"), new DpapiSecretProtector()).LoadOrCreate();
+                    await StabilityTests.RunAsync(targetCertificate, controllerCertificate).ConfigureAwait(false);
                     VerifyBackgroundPreferencePersistence(Path.Combine(root, "config"));
                     await InvalidCodeDoesNotPromptAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);
                     await CertificateSubstitutionProofDoesNotPromptAsync(targetCertificate, controllerCertificate, cts.Token).ConfigureAwait(false);

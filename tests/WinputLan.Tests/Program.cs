@@ -194,6 +194,12 @@ namespace WinputLan.Tests
             Assert(policy.ShouldEmit(InputKind.MouseMove, "sent", now), "first mouse move emitted");
             Assert(!policy.ShouldEmit(InputKind.MouseMove, "sent", now.AddMilliseconds(249)), "mouse move rate limited");
             Assert(policy.ShouldEmit(InputKind.MouseWheel, "received", now.AddMilliseconds(250)), "high frequency update resumes at four hertz");
+            foreach (var status in new[] { "sent", "received", "dropped-sink" })
+            {
+                var deltas = new InputAuditPolicy();
+                var emitted = Enumerable.Range(0, 1000).Count(i => deltas.ShouldEmit(InputKind.MouseDelta, status, now.AddMilliseconds(i)));
+                Assert(emitted == 4, "relative motion is throttled on every audit path: " + status);
+            }
         }
 
         private static void TestInputRouting()
@@ -203,6 +209,7 @@ namespace WinputLan.Tests
             // Switch to remote while the chord modifier is physically held: its release must stay local.
             Assert(routing.Press(ctrl) == InputRoute.Local, "modifier pressed before switching is local");
             routing.SetRemoteActive(true);
+            Assert(routing.Press(ctrl) == InputRoute.Local && routing.Press(ctrl) == InputRoute.Local, "held-key repeats preserve their original local owner");
             Assert(routing.Release(ctrl) == InputRoute.Local, "local press is released locally, never stuck");
             Assert(routing.Press(a) == InputRoute.Remote && routing.Release(a) == InputRoute.Remote, "keys typed during control go remote");
             Assert(routing.Continuous() == InputRoute.Remote, "motion and wheel go remote while active");
