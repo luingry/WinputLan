@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-09-24 - Scroll fica no PC controlador com SmoothMice aberto
+
+- Sintoma: controlando o PC 2, a roda do mouse rolava a janela local do PC 1 em vez de ir para o alvo.
+- Causa raiz: o Windows chama primeiro o hook de baixo nível instalado por último. O SmoothMice (re)instala o hook dele depois do WinputLan (ex.: ao salvar configurações), consome a roda e a reinjeta localmente; o hook do WinputLan nunca a via.
+- Solução: `RaiseMouseHook` reinstala o hook de mouse (instala o novo antes de remover o antigo, na thread do hook, sem janela de perda nem duplicação) sempre que a entrada passa para o PC remoto.
+- Prevenção: validado com sonda de dois hooks + `SendInput`; um hook instalado por outro app durante a sessão remota só perde a frente na próxima troca.
+
 ## 2026-09-23 - Atalho de alternância conecta mas não troca o foco
 
 - Sintoma: com a máquina reconhecida desconectada, o atalho remoto abria a conexão, mas a entrada só ia para o alvo num segundo toque.

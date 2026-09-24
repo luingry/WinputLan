@@ -49,6 +49,7 @@ namespace WinputLan.Runtime
         private NativeMethods.HookProc _mouseProc;
         private IntPtr _keyboardHook;
         private IntPtr _mouseHook;
+        private IntPtr _module;
         private Thread _thread;
         private uint _threadId;
         private NativeMethods.POINT _anchor;
@@ -94,9 +95,9 @@ namespace WinputLan.Runtime
             NativeMethods.UsePhysicalPixels();
             _keyboardProc = KeyboardCallback;
             _mouseProc = MouseCallback;
-            var module = NativeMethods.GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName);
-            _keyboardHook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _keyboardProc, module, 0);
-            _mouseHook = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseProc, module, 0);
+            _module = NativeMethods.GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName);
+            _keyboardHook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _keyboardProc, _module, 0);
+            _mouseHook = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseProc, _module, 0);
             started.Set();
             try
             {
@@ -124,6 +125,9 @@ namespace WinputLan.Runtime
             if (active == _routing.RemoteActive) return;
             if (active)
             {
+                // Windows calls the most recently installed low-level hook first. Another wheel hook installed
+                // after ours (e.g. SmoothMice) would consume the wheel locally, so move ours back to the front.
+                RaiseMouseHook();
                 // Pin the local cursor at the primary screen centre: every hook position is then anchor + motion.
                 NativeMethods.GetCursorPos(out _restore);
                 _anchor = new NativeMethods.POINT { X = NativeMethods.GetSystemMetrics(NativeMethods.SmCxScreen) / 2, Y = NativeMethods.GetSystemMetrics(NativeMethods.SmCyScreen) / 2 };
@@ -135,6 +139,15 @@ namespace WinputLan.Runtime
                 _routing.SetRemoteActive(false);
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
             }
+        }
+
+        // Runs on the hook thread, which does not pump in between, so no event is seen twice or missed.
+        private void RaiseMouseHook()
+        {
+            var raised = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseProc, _module, 0);
+            if (raised == IntPtr.Zero) return;
+            NativeMethods.UnhookWindowsHookEx(_mouseHook);
+            _mouseHook = raised;
         }
 
         private IntPtr KeyboardCallback(int code, IntPtr wParam, IntPtr lParam)
