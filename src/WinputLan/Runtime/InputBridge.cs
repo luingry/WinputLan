@@ -238,8 +238,14 @@ namespace WinputLan.Runtime
     {
         public const long InputTag = 0x57494E505554;
         public const uint HorizontalWheelFlag = 1;
-        // After this idle gap the virtual cursor resyncs with the real one, which the local user may have moved.
-        private const int CursorResyncMs = 250;
+        // After this idle gap the virtual cursor resyncs with the real one, which the local user or an app may have
+        // moved. Injected motion is applied well within it, so an in-sync cursor resyncs to the same point.
+        private const int CursorResyncMs = 50;
+        // The monitor layout is re-read at this age, or at once when the virtual screen changes.
+        private const int MonitorRefreshMs = 2000;
+        private readonly List<PixelRect> _monitors = new List<PixelRect>();
+        private NativeMethods.RECT _monitorsScreen;
+        private int _monitorsTick;
         // Pressed key -> its hook flags, so a fail-safe release keeps the extended-key bit of the original press.
         private readonly Dictionary<ushort, uint> _pressedKeys = new Dictionary<ushort, uint>();
         private readonly HashSet<uint> _pressedButtons = new HashSet<uint>();
@@ -293,6 +299,11 @@ namespace WinputLan.Runtime
                         _lastDeltaTick = tick;
                         _cursorX = Math.Max(left, Math.Min(left + width - 1, _cursorX + value.X));
                         _cursorY = Math.Max(top, Math.Min(top + height - 1, _cursorY + value.Y));
+                        // Mid-drag the cursor may be clipped (window move/size loops, games) or stopped by a gap
+                        // between monitors; follow the same limits so moving back responds at once.
+                        NativeMethods.RECT clip;
+                        var clipRect = NativeMethods.GetClipCursor(out clip) ? new PixelRect(clip.Left, clip.Top, clip.Right, clip.Bottom) : default(PixelRect);
+                        CursorBounds.Clamp(ref _cursorX, ref _cursorY, clipRect, Monitors(tick, left, top, width, height));
                         dx = PointerCoordinates.ToAbsolute(_cursorX, left, width);
                         dy = PointerCoordinates.ToAbsolute(_cursorY, top, height);
                     }
@@ -339,6 +350,25 @@ namespace WinputLan.Runtime
                 up.MouseData = (ushort)(button >> 16);
                 Publish(up);
             }
+        }
+
+        // Called under _gate in the physical-pixel DPI context, so monitor bounds match the cursor space.
+        private List<PixelRect> Monitors(int tick, int left, int top, int width, int height)
+        {
+            var screen = new NativeMethods.RECT { Left = left, Top = top, Right = left + width, Bottom = top + height };
+            if (_monitors.Count > 0 && unchecked(tick - _monitorsTick) < MonitorRefreshMs && screen.Left == _monitorsScreen.Left && screen.Top == _monitorsScreen.Top && screen.Right == _monitorsScreen.Right && screen.Bottom == _monitorsScreen.Bottom) return _monitors;
+            _monitors.Clear();
+            NativeMethods.MonitorEnumProc collect = (IntPtr monitor, IntPtr hdc, ref NativeMethods.RECT bounds, IntPtr data) =>
+            {
+                _monitors.Add(new PixelRect(bounds.Left, bounds.Top, bounds.Right, bounds.Bottom));
+                return true;
+            };
+            try { NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, collect, IntPtr.Zero); }
+            catch { _monitors.Clear(); }
+            GC.KeepAlive(collect);
+            _monitorsScreen = screen;
+            _monitorsTick = tick;
+            return _monitors;
         }
 
         private static uint ButtonKey(uint downMessage, ushort mouseData) { return downMessage == 0x020B ? downMessage | ((uint)mouseData << 16) : downMessage; }
@@ -422,6 +452,17 @@ namespace WinputLan.Runtime
 
         [DllImport("user32.dll")] internal static extern IntPtr MonitorFromPoint(POINT point, uint flags);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetMonitorInfo(IntPtr monitor, ref MONITORINFO info);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetClipCursor(out RECT rect);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr clip, MonitorEnumProc callback, IntPtr data);
+        [return: MarshalAs(UnmanagedType.Bool)] internal delegate bool MonitorEnumProc(IntPtr monitor, IntPtr hdc, ref RECT bounds, IntPtr data);
+
+        internal const uint CreateWaitableTimerHighResolution = 0x00000002;
+        internal const uint TimerAllAccess = 0x1F0003;
+        internal const uint WaitObject0 = 0;
+
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)] internal static extern Microsoft.Win32.SafeHandles.SafeWaitHandle CreateWaitableTimerEx(IntPtr attributes, string name, uint flags, uint access);
+        [DllImport("kernel32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetWaitableTimer(Microsoft.Win32.SafeHandles.SafeWaitHandle timer, ref long dueTime, int period, IntPtr completion, IntPtr completionArg, [MarshalAs(UnmanagedType.Bool)] bool resume);
+        [DllImport("kernel32.dll", SetLastError = true)] internal static extern uint WaitForSingleObject(Microsoft.Win32.SafeHandles.SafeWaitHandle handle, uint milliseconds);
 
         [StructLayout(LayoutKind.Sequential)] internal struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
         [StructLayout(LayoutKind.Sequential)] internal struct MONITORINFO { public int Size; public RECT Monitor; public RECT Work; public uint Flags; }

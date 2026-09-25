@@ -42,7 +42,7 @@ UI, accessibility names, keyboard focus triggers, and generated direction
 assets are checked into the repo. Physical two-PC input acceptance, UIPI/UAC,
 and signed-update acceptance remain release-gate work.
 
-## Stability regressions (0.3.16)
+## Stability regressions (0.3.17)
 
 `StabilityTests` exercises inbound/outbound TLS cancellation, explicit disconnect,
 shutdown and handshake deadlines against silent TCP peers, then reuses the same
@@ -60,3 +60,10 @@ A receiver whose injection is held mid-drag must merge the 200 relative moves
 queued behind it into one move with the exact total distance, and inject the
 button release only after that move. Core tests also check that this merging
 never crosses a click, a control frame, or a transport state change.
+
+Motion pacing sends 100 relative samples at 1000 Hz through a real router and
+TLS session and requires the full distance with far fewer frames (about 25 at
+the 4 ms interval). With a 2 s interval, a click queued behind paced motion must
+still arrive at once, right after that motion. Core tests check that the pacing
+merge never crosses a click or an epoch, and that the tracked cursor on the
+target keeps to the ClipCursor rectangle and never enters gaps between monitors.

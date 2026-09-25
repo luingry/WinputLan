@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using WinputLan.Core;
@@ -19,12 +20,21 @@ namespace WinputLan.Runtime
         private bool _overflowed;
         private long _activationEpoch;
         private long _announcedEpoch = -1;
+        // Continuous motion leaves at most once per interval, merged. A 1000 Hz mouse otherwise costs a TLS
+        // record and a packet per sample, which Wi-Fi turns into jitter. Motion after a pause goes at once.
+        public static readonly TimeSpan DefaultMotionInterval = TimeSpan.FromMilliseconds(4);
+        private readonly long _motionIntervalTicks;
+        private long _lastMotionTimestamp;
 
-        public InputRouter(InputEventQueue queue, PeerTransport transport, IInputSink releaseSink)
+        public InputRouter(InputEventQueue queue, PeerTransport transport, IInputSink releaseSink) : this(queue, transport, releaseSink, DefaultMotionInterval) { }
+
+        public InputRouter(InputEventQueue queue, PeerTransport transport, IInputSink releaseSink, TimeSpan motionInterval)
         {
             _queue = queue ?? throw new ArgumentNullException("queue");
             _transport = transport ?? throw new ArgumentNullException("transport");
             _releaseSink = releaseSink ?? throw new ArgumentNullException("releaseSink");
+            if (motionInterval < TimeSpan.Zero) throw new ArgumentOutOfRangeException("motionInterval");
+            _motionIntervalTicks = (long)(motionInterval.TotalSeconds * Stopwatch.Frequency);
             _transport.StateChanged += Transport_StateChanged;
             _transport.FrameReceived += Transport_FrameReceived;
             _ = DrainLoopAsync(_cts.Token);
@@ -88,11 +98,13 @@ namespace WinputLan.Runtime
 
         private async Task DrainLoopAsync(CancellationToken token)
         {
+            var pacer = _motionIntervalTicks > 0 ? HighResolutionWait.TryCreate() : null;
             try
             {
                 while (true)
                 {
                     var entry = await _queue.DequeueEntryAsync(token).ConfigureAwait(false);
+                    if (entry.Value.Kind == InputKind.MouseDelta) entry = PaceMotion(entry, pacer, token);
                     await _focusGate.WaitAsync(token).ConfigureAwait(false);
                     try
                     {
@@ -107,6 +119,27 @@ namespace WinputLan.Runtime
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            finally { pacer?.Dispose(); }
+        }
+
+        // Holds a motion until the interval since the previous one has passed, folding in motion that arrives
+        // meanwhile. Stops early when a click, key or wheel queues behind it, so those are never delayed.
+        private InputEventQueue.Entry PaceMotion(InputEventQueue.Entry entry, HighResolutionWait pacer, CancellationToken token)
+        {
+            if (pacer != null)
+            {
+                var due = _lastMotionTimestamp + _motionIntervalTicks;
+                var now = Stopwatch.GetTimestamp();
+                while (now < due && !token.IsCancellationRequested && _queue.OnlyMotionPending(entry.Epoch) && IsCurrent(entry.Epoch, true))
+                {
+                    // Short slices keep an arriving click from waiting out the whole interval.
+                    var slice = Math.Min(due - now, Stopwatch.Frequency / 1000);
+                    if (!pacer.Wait(TimeSpan.FromTicks(slice * TimeSpan.TicksPerSecond / Stopwatch.Frequency))) break;
+                    now = Stopwatch.GetTimestamp();
+                }
+            }
+            _lastMotionTimestamp = Stopwatch.GetTimestamp();
+            return _queue.MergeFollowingMotion(entry);
         }
 
         private async Task ApplyFocusAsync(long epoch, bool active, CancellationToken token)

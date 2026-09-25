@@ -1,5 +1,15 @@
 # Errors and prevention
 
+## 2026-09-25 - Cursor "grudento" nos limites e rajadas de pacotes no Wi-Fi (0.3.17)
+
+- Sintoma 1: depois de empurrar o cursor contra um limite no PC controlado (área presa por ClipCursor, vão entre monitores de tamanhos diferentes), ao voltar o mouse o cursor ficava parado por um trecho.
+- Causa 1: o `SendInputSink` soma deltas a uma posição própria, limitada apenas à caixa da tela virtual. O Windows segurava o cursor real, mas a posição própria seguia andando. O movimento de volta era gasto desfazendo esse deslocamento, e só havia ressincronização após 250 ms parado.
+- Solução 1: `CursorBounds.Clamp` (Core) aplica o retângulo de `GetClipCursor` e os limites dos monitores (`EnumDisplayMonitors`, em cache) à posição própria; a ressincronização por inatividade caiu para 50 ms.
+- Sintoma 2: um mouse de 1000 Hz gerava um registro TLS e um pacote por amostra, e o Wi-Fi transformava isso em variação de latência.
+- Solução 2: o dreno do `InputRouter` espaça movimentos contínuos em 4 ms e soma o que chega nesse intervalo. Espera em fatias de 1 ms e sai na hora se um clique, tecla ou roda entrar na fila.
+- Armadilha: `Task.Delay`/`Thread.Sleep` seguem o tick padrão de ~15,6 ms do Windows, então um intervalo de 4 ms virava ~16 ms. Use o `HighResolutionWait` (`CreateWaitableTimerEx` com `CREATE_WAITABLE_TIMER_HIGH_RESOLUTION`) em vez de `timeBeginPeriod`, que o Windows 11 ignora em processos com a janela oculta ou minimizada. Sem esse timer, o envio não é espaçado.
+- Prevenção: os testes Core `paced motion folds only the motion behind it` e `tracked cursor obeys clip and monitor limits`; o loopback `paced motion` (100 amostras em 100 ms resultam em ~25 frames com a distância exata; clique atrás de movimento espaçado em 2 s chega na hora e na ordem).
+
 ## 2026-09-25 - Arrastar janela no PC controlado fica lento / atrasado
 
 - Sintoma: ao segurar o clique e mover o mouse (arrastar uma janela) no PC controlado, o movimento ficava para trás do mouse físico e só "alcançava" quando o mouse parava.

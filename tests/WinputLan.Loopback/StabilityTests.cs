@@ -24,7 +24,8 @@ namespace WinputLan.Loopback
             await FocusAndOverflowAsync(targetCert, controllerCert).ConfigureAwait(false);
             await ReceiverDisconnectAsync(targetCert, controllerCert).ConfigureAwait(false);
             await SlowInjectionMergesMotionAsync(targetCert, controllerCert).ConfigureAwait(false);
-            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge");
+            await MotionPacingAsync(targetCert, controllerCert).ConfigureAwait(false);
+            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge, paced motion");
         }
 
         private static PeerTransport FastTransport()
@@ -228,6 +229,81 @@ namespace WinputLan.Loopback
                 }
                 controller.Disconnect("test complete"); await MustEnd(listen, "receiver cleanup").ConfigureAwait(false);
             }
+        }
+
+        // A 1000 Hz mouse must leave as a few merged frames per pacing interval with the exact total distance,
+        // and a click behind paced motion must go out at once, right after that motion.
+        private static async Task MotionPacingAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert)
+        {
+            using (var target = new PeerTransport()) using (var controller = new PeerTransport())
+            {
+                var port = FreePort(); var listen = target.ListenOnceAsync(port, targetCert, null, true, CancellationToken.None);
+                await controller.ConnectAsync("127.0.0.1", port, controllerCert, null, true, CancellationToken.None).ConfigureAwait(false);
+                await Until(() => target.ObservedRemoteFingerprint != null, "pacing TLS publication").ConfigureAwait(false);
+                target.SetInputDirection(false, true); controller.SetInputDirection(true, false); target.MarkPaired(); controller.MarkPaired();
+                var sink = new OrderSink(); var motionFrames = 0;
+                target.FrameReceived += frame => { if (frame.Type == FrameType.Input && FrameCodec.DecodeInput(frame.Payload).Kind == InputKind.MouseDelta) Interlocked.Increment(ref motionFrames); };
+                using (var receiver = new PairedInputReceiver(target, sink))
+                {
+                    using (var router = new InputRouter(new InputEventQueue(), controller, new TrackingSink()))
+                    {
+                        router.SetRemoteActive(true);
+                        var watch = Stopwatch.StartNew();
+                        for (var i = 0; i < 100; i++)
+                        {
+                            router.Publish(InputEvent.MouseDelta(1, -1, DateTime.UtcNow.Ticks));
+                            var next = (i + 1) * Stopwatch.Frequency / 1000;
+                            while (watch.ElapsedTicks < next) Thread.SpinWait(50);
+                        }
+                        await Until(() => sink.X == 100, "paced motion lost distance").ConfigureAwait(false);
+                        if (sink.Y != -100) throw new Exception("paced motion lost vertical distance: " + sink.Y);
+                        var frames = Volatile.Read(ref motionFrames);
+                        if (frames > 50) throw new Exception("100 motion samples in 100 ms left as " + frames + " frames; pacing is not merging");
+                        Console.WriteLine("PACING: 100 motion samples in 100 ms left as {0} frames", frames);
+                        router.SetRemoteActive(false);
+                    }
+                    // A very long interval makes any wait on the click obvious.
+                    sink.Clear(); Volatile.Write(ref motionFrames, 0);
+                    using (var router = new InputRouter(new InputEventQueue(), controller, new TrackingSink(), TimeSpan.FromSeconds(2)))
+                    {
+                        router.SetRemoteActive(true);
+                        router.Publish(InputEvent.MouseDelta(5, 0, DateTime.UtcNow.Ticks));
+                        await Until(() => sink.X == 5, "first motion after a pause was held").ConfigureAwait(false);
+                        router.Publish(InputEvent.MouseDelta(7, 0, DateTime.UtcNow.Ticks));
+                        await Task.Delay(50).ConfigureAwait(false);
+                        var watch = Stopwatch.StartNew();
+                        router.Publish(InputEvent.MouseButton(InputKind.MouseButtonDown, 0x0201, DateTime.UtcNow.Ticks));
+                        await Until(() => sink.Order.Contains("down"), "click behind paced motion never arrived").ConfigureAwait(false);
+                        if (watch.ElapsedMilliseconds > 1000) throw new Exception("click waited out the pacing interval: " + watch.ElapsedMilliseconds + " ms");
+                        var order = string.Join(",", sink.Order);
+                        if (order != "move5,move7,down") throw new Exception("paced motion crossed the click: " + order);
+                        router.SetRemoteActive(false);
+                    }
+                }
+                controller.Disconnect("test complete"); target.Disconnect("test complete");
+                await MustEnd(listen, "pacing listener cleanup").ConfigureAwait(false);
+            }
+        }
+
+        private sealed class OrderSink : IFailSafeInputSink
+        {
+            private readonly object _gate = new object();
+            private readonly List<string> _order = new List<string>();
+            private int _x, _y;
+            public int X { get { lock (_gate) return _x; } }
+            public int Y { get { lock (_gate) return _y; } }
+            public List<string> Order { get { lock (_gate) return new List<string>(_order); } }
+            public void Clear() { lock (_gate) { _order.Clear(); _x = 0; _y = 0; } }
+            public bool Publish(InputEvent value)
+            {
+                lock (_gate)
+                {
+                    if (value.Kind == InputKind.MouseDelta) { _x += value.X; _y += value.Y; _order.Add("move" + value.X); }
+                    else if (value.Kind == InputKind.MouseButtonDown) _order.Add("down");
+                }
+                return true;
+            }
+            public void ReleaseAll() { }
         }
 
         private static int QueuedFrames(PairedInputReceiver receiver)

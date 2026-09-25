@@ -105,6 +105,40 @@ namespace WinputLan.Core
             }
         }
 
+        // True while nothing but motion of this epoch waits, so a paced motion may keep waiting without
+        // holding back a click, key or wheel behind it.
+        public bool OnlyMotionPending(long epoch)
+        {
+            lock (_gate)
+            {
+                foreach (var item in _items) if (item.Epoch != epoch || item.Value.Kind != InputKind.MouseDelta) return false;
+                return true;
+            }
+        }
+
+        // Folds motion waiting at the head into a dequeued motion; the result keeps the oldest timestamp.
+        public Entry MergeFollowingMotion(Entry entry)
+        {
+            if (entry == null) throw new ArgumentNullException("entry");
+            if (entry.Value.Kind != InputKind.MouseDelta) return entry;
+            lock (_gate)
+            {
+                var x = entry.Value.X;
+                var y = entry.Value.Y;
+                var merged = false;
+                while (_items.First != null && _items.First.Value.Epoch == entry.Epoch && _items.First.Value.Value.Kind == InputKind.MouseDelta)
+                {
+                    x += _items.First.Value.Value.X;
+                    y += _items.First.Value.Value.Y;
+                    _items.RemoveFirst();
+                    // The removed item's permit must go with it, or the drain would wake for nothing.
+                    _available.Wait(0);
+                    merged = true;
+                }
+                return merged ? new Entry(InputEvent.MouseDelta(x, y, entry.Value.TimestampUtcTicks), entry.Epoch) : entry;
+            }
+        }
+
         public void Clear()
         {
             lock (_gate)

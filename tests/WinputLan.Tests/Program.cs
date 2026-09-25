@@ -23,6 +23,8 @@ namespace WinputLan.Tests
             Run("queue coalescing and order", TestQueue);
             Run("queue coalesce clear leaves no phantom permit", TestQueueSignals);
             Run("inbound queue merges waiting motion only", TestInboundQueue);
+            Run("paced motion folds only the motion behind it", TestMotionPacingQueue);
+            Run("tracked cursor obeys clip and monitor limits", TestCursorBounds);
             Run("LAN IPv4 selection prefers routed Ethernet/Wi-Fi", TestLanAddressSelection);
             Run("rolling latency window is p50 and throttled", TestLatencyWindow);
             Run("input audit filters duplicates and throttles high frequency", TestInputAuditPolicy);
@@ -195,6 +197,56 @@ namespace WinputLan.Tests
             queue.Complete();
             Assert(waiter.Wait(1000) && !waiter.Result, "complete releases a blocked injector");
             Assert(!queue.Enqueue(input(InputEvent.MouseDelta(1, 1, 12)), 1) && queue.Count == 0, "completed queue accepts nothing");
+        }
+
+        private static void TestMotionPacingQueue()
+        {
+            var queue = new InputEventQueue(8);
+            queue.Enqueue(InputEvent.MouseDelta(1, 1, 1), 3);
+            InputEventQueue.Entry entry;
+            using (var cancellation = new System.Threading.CancellationTokenSource(1000)) entry = queue.DequeueEntryAsync(cancellation.Token).GetAwaiter().GetResult();
+            Assert(queue.OnlyMotionPending(3), "an empty queue lets motion keep pacing");
+            queue.Enqueue(InputEvent.MouseDelta(2, 3, 2), 3);
+            queue.Enqueue(InputEvent.MouseDelta(4, 5, 3), 3);
+            Assert(queue.OnlyMotionPending(3) && !queue.OnlyMotionPending(4), "pending motion of another epoch stops pacing");
+            var merged = queue.MergeFollowingMotion(entry);
+            Assert(merged.Value.X == 7 && merged.Value.Y == 9 && merged.Value.TimestampUtcTicks == 1 && merged.Epoch == 3 && queue.Count == 0, "waiting motion folds into the paced one");
+            queue.Enqueue(InputEvent.MouseButton(InputKind.MouseButtonUp, 0x0202, 4), 3);
+            queue.Enqueue(InputEvent.MouseDelta(1, 1, 5), 3);
+            Assert(!queue.OnlyMotionPending(3), "a queued click ends pacing");
+            Assert(ReferenceEquals(queue.MergeFollowingMotion(merged), merged) && queue.Count == 2, "motion never folds across a click");
+            queue.Clear();
+            queue.Enqueue(InputEvent.MouseDelta(1, 1, 6), 3);
+            queue.MergeFollowingMotion(merged);
+            using (var cancellation = new System.Threading.CancellationTokenSource())
+            {
+                var wait = queue.DequeueEntryAsync(cancellation.Token);
+                System.Threading.Thread.Sleep(20);
+                Assert(!wait.IsCompleted, "folding consumes the folded item's permit");
+                cancellation.Cancel();
+                try { wait.GetAwaiter().GetResult(); } catch (OperationCanceledException) { }
+            }
+        }
+
+        private static void TestCursorBounds()
+        {
+            var monitors = new[] { new PixelRect(0, 0, 1920, 1080), new PixelRect(1920, 0, 4480, 1440) };
+            var none = default(PixelRect);
+            int x = 500, y = 500;
+            CursorBounds.Clamp(ref x, ref y, none, monitors);
+            Assert(x == 500 && y == 500, "a point on a monitor is kept");
+            x = 1000; y = 1300;
+            CursorBounds.Clamp(ref x, ref y, none, monitors);
+            Assert(x == 1000 && y == 1079, "the gap below a shorter monitor snaps to its edge");
+            x = 1919; y = 1300;
+            CursorBounds.Clamp(ref x, ref y, none, monitors);
+            Assert(x == 1920 && y == 1300, "the nearest monitor wins");
+            x = 3000; y = 900;
+            CursorBounds.Clamp(ref x, ref y, new PixelRect(2000, 100, 2600, 700), monitors);
+            Assert(x == 2599 && y == 699, "the clip rectangle holds the cursor like Windows does");
+            x = 50; y = 50;
+            CursorBounds.Clamp(ref x, ref y, none, new PixelRect[0]);
+            Assert(x == 50 && y == 50, "no layout leaves the point alone");
         }
 
         private static void TestLanAddressSelection()

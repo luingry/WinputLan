@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.17] - 2026-09-25
+
+### Changed
+
+- Pace continuous mouse motion on the controlling PC: samples are merged and sent at most every 4 ms (about a quarter of the packets from a 1000 Hz mouse), which smooths control over Wi-Fi. Motion after a pause, clicks, keys and the wheel are never delayed.
+
+### Fixed
+
+- The pointer on the controlled PC no longer gets "stuck" after pushing against a limit: the tracked cursor now keeps to the ClipCursor area and to the monitors (no gaps between screens of different sizes), and resyncs with the real cursor after 50 ms idle instead of 250 ms.
+
 ## [0.3.16] - 2026-09-25
 
 ### Fixed
