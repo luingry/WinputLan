@@ -9,8 +9,14 @@ namespace WinputLan.Runtime
     {
         private readonly PeerTransport _transport;
         private readonly IInputSink _sink;
-        private bool _disposed;
+        private volatile bool _disposed;
         private readonly object _inputGate = new object();
+        // The socket reader only queues frames; this thread injects them. Motion that arrives while an
+        // injection is slow merges in the queue instead of piling up in the TCP buffer as lag.
+        private readonly InboundFrameQueue _queue = new InboundFrameQueue();
+        private readonly Thread _injector;
+        // Bumped on every transport state change: frames queued before it are never injected after it.
+        private long _epoch;
         private int _lastAckTick;
         // Third safeguard: input is injected only while the controller has announced focus on this PC.
         private volatile bool _focused;
@@ -21,6 +27,8 @@ namespace WinputLan.Runtime
         {
             _transport = transport ?? throw new ArgumentNullException("transport");
             _sink = sink ?? throw new ArgumentNullException("sink");
+            _injector = new Thread(InjectLoop) { IsBackground = true, Name = "WinputLan input injection", Priority = ThreadPriority.Highest };
+            _injector.Start();
             _transport.FrameReceived += Transport_FrameReceived;
             _transport.StateChanged += Transport_StateChanged;
         }
@@ -35,22 +43,32 @@ namespace WinputLan.Runtime
             _disposed = true;
             _transport.FrameReceived -= Transport_FrameReceived;
             _transport.StateChanged -= Transport_StateChanged;
-            lock (_inputGate) { _focused = false; ReleaseAll(); }
+            lock (_inputGate) { _focused = false; _epoch++; _queue.Complete(); ReleaseAll(); }
         }
 
         private void Transport_FrameReceived(Frame frame)
         {
-            // A disconnect must release inputs after an in-flight injection has finished, never before.
-            long? ack = null;
-            lock (_inputGate) { if (!_disposed) HandleFrame(frame, out ack); }
-            // Don't acquire the transport gate while holding the injection gate: state callbacks
-            // can originate under the transport gate during connection publication.
-            if (ack.HasValue) _ = SendAckAsync(ack.Value);
+            if (!_disposed) _queue.Enqueue(frame, Interlocked.Read(ref _epoch));
         }
 
-        private void HandleFrame(Frame frame, out long? ack)
+        private void InjectLoop()
+        {
+            InboundFrameQueue.Entry entry;
+            while (_queue.TryDequeue(out entry))
+            {
+                // A disconnect must release inputs after an in-flight injection has finished, never before.
+                long? ack = null;
+                lock (_inputGate) { if (!_disposed && entry.Epoch == _epoch) HandleFrame(entry, out ack); }
+                // Don't acquire the transport gate while holding the injection gate: state callbacks
+                // can originate under the transport gate during connection publication.
+                if (ack.HasValue) _ = SendAckAsync(ack.Value);
+            }
+        }
+
+        private void HandleFrame(InboundFrameQueue.Entry entry, out long? ack)
         {
             ack = null;
+            var frame = entry.Frame;
             if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll))
             {
                 InputAudited?.Invoke(InputKind.KeyDown, "dropped-direction");
@@ -69,16 +87,15 @@ namespace WinputLan.Runtime
             if (frame.Type != FrameType.Input) return;
             if (_transport.State != PeerConnectionState.Connected) { InputAudited?.Invoke(InputKind.KeyDown, "dropped-unpaired"); return; }
             if (!_focused) { InputAudited?.Invoke(InputKind.KeyDown, "dropped-unfocused"); return; }
-            try
-            {
-                var input = FrameCodec.DecodeInput(frame.Payload);
-                var accepted = _sink.Publish(input);
-                InputAudited?.Invoke(input.Kind, accepted ? "received" : "dropped-sink");
-                var tick = Environment.TickCount;
-                var motion = input.Kind == InputKind.MouseDelta || input.Kind == InputKind.MouseMove;
-                if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; ack = input.TimestampUtcTicks; }
-            }
-            catch { InputAudited?.Invoke(InputKind.KeyDown, "dropped-invalid"); }
+            var input = entry.Input;
+            if (input == null) { InputAudited?.Invoke(InputKind.KeyDown, "dropped-invalid"); return; }
+            bool accepted;
+            try { accepted = _sink.Publish(input); }
+            catch { InputAudited?.Invoke(InputKind.KeyDown, "dropped-invalid"); return; }
+            InputAudited?.Invoke(input.Kind, accepted ? "received" : "dropped-sink");
+            var tick = Environment.TickCount;
+            var motion = input.Kind == InputKind.MouseDelta || input.Kind == InputKind.MouseMove;
+            if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; ack = input.TimestampUtcTicks; }
         }
 
         private async System.Threading.Tasks.Task SendAckAsync(long timestampUtcTicks)
@@ -93,6 +110,8 @@ namespace WinputLan.Runtime
             lock (_inputGate)
             {
                 _focused = false;
+                Interlocked.Increment(ref _epoch);
+                _queue.Clear();
                 if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
             }
         }

@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-09-25 - Arrastar janela no PC controlado fica lento / atrasado
+
+- Sintoma: ao segurar o clique e mover o mouse (arrastar uma janela) no PC controlado, o movimento ficava para trás do mouse físico e só "alcançava" quando o mouse parava.
+- Causa raiz: o receptor injetava cada frame recebido com `SendInput`, um por um, na própria thread de leitura do socket. O controlador só junta deltas quando a fila dele atrasa; depois que os frames saem para o TCP, nada mais os junta. Enquanto o PC controlado está ocupado (o arrasto redesenha a janela a cada movimento), a injeção fica mais lenta que a taxa do mouse (500–1000 Hz). A diferença se acumula no buffer TCP como atraso e é reproduzida evento a evento.
+- Solução: `InboundFrameQueue` (Core) fica entre o socket e a injeção. Uma thread dedicada de prioridade alta injeta os frames. Movimentos consecutivos que ainda aguardam são somados (sem perder distância, mantendo o timestamp mais antigo para o ACK). Cliques, teclas, foco e ReleaseAll mantêm posição e ordem. Uma epoch por mudança de estado do transporte descarta frames enfileirados antes da mudança.
+- Prevenção: o teste Core `inbound queue merges waiting motion only` e o loopback `slow-injection motion merge` (injeção travada + 200 deltas + soltura do botão resultam em 2 movimentos com a soma exata, antes da soltura). Esses testes não medem a fluidez física entre dois PCs.
+
 ## 2026-09-24 - Finalizador local assina manifesto com chave não fixada no aplicativo
 
 - Sintoma: o pacote local de 0.3.13 tinha SHA-256 correto, mas `ReleaseManifestSignature.Verify` rejeitou sua assinatura.

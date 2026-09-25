@@ -42,7 +42,7 @@ UI, accessibility names, keyboard focus triggers, and generated direction
 assets are checked into the repo. Physical two-PC input acceptance, UIPI/UAC,
 and signed-update acceptance remain release-gate work.
 
-## Stability regressions (0.3.15)
+## Stability regressions (0.3.16)
 
 `StabilityTests` exercises inbound/outbound TLS cancellation, explicit disconnect,
 shutdown and handshake deadlines against silent TCP peers, then reuses the same
@@ -55,3 +55,8 @@ press. Queue saturation while a key is held must disconnect and release the key
 without passing its dropped release through the local hook. These tests use a
 recording sink and never inject physical input. Core tests also assert held-key
 repeat ownership and four-Hz auditing of relative movement.
+
+A receiver whose injection is held mid-drag must merge the 200 relative moves
+queued behind it into one move with the exact total distance, and inject the
+button release only after that move. Core tests also check that this merging
+never crosses a click, a control frame, or a transport state change.

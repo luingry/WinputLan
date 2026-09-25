@@ -23,7 +23,8 @@ namespace WinputLan.Loopback
             await CongestedHeartbeatAsync(targetCert, controllerCert).ConfigureAwait(false);
             await FocusAndOverflowAsync(targetCert, controllerCert).ConfigureAwait(false);
             await ReceiverDisconnectAsync(targetCert, controllerCert).ConfigureAwait(false);
-            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release");
+            await SlowInjectionMergesMotionAsync(targetCert, controllerCert).ConfigureAwait(false);
+            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge");
         }
 
         private static PeerTransport FastTransport()
@@ -197,6 +198,63 @@ namespace WinputLan.Loopback
         }
 
 
+
+        // A drag on a busy target: while one injection is stuck, the motion behind it must collapse
+        // into one move instead of replaying event by event, and the button release must follow it.
+        private static async Task SlowInjectionMergesMotionAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert)
+        {
+            using (var target = new PeerTransport()) using (var controller = new PeerTransport())
+            using (var sink = new PausedMotionSink())
+            {
+                var port = FreePort(); var listen = target.ListenOnceAsync(port, targetCert, null, true, CancellationToken.None);
+                await controller.ConnectAsync("127.0.0.1", port, controllerCert, null, true, CancellationToken.None).ConfigureAwait(false);
+                await Until(() => target.ObservedRemoteFingerprint != null, "receiver TLS publication").ConfigureAwait(false);
+                target.SetInputDirection(false, true); controller.SetInputDirection(true, false); target.MarkPaired(); controller.MarkPaired();
+                using (var receiver = new PairedInputReceiver(target, sink))
+                {
+                    Func<InputEvent, Task> send = value => controller.SendAsync(FrameType.Input, FrameCodec.EncodeInput(value), CancellationToken.None);
+                    await controller.SendAsync(FrameType.ControlFocus, new byte[] { 1 }, CancellationToken.None).ConfigureAwait(false);
+                    await send(InputEvent.MouseButton(InputKind.MouseButtonDown, 0x0201, DateTime.UtcNow.Ticks)).ConfigureAwait(false);
+                    await send(InputEvent.MouseDelta(1, 0, DateTime.UtcNow.Ticks)).ConfigureAwait(false);
+                    await Until(() => sink.Entered.IsSet, "receiver didn't enter the slow injection").ConfigureAwait(false);
+                    for (var i = 0; i < 200; i++) await send(InputEvent.MouseDelta(1, 2, DateTime.UtcNow.Ticks)).ConfigureAwait(false);
+                    await send(InputEvent.MouseButton(InputKind.MouseButtonUp, 0x0202, DateTime.UtcNow.Ticks)).ConfigureAwait(false);
+                    await Until(() => QueuedFrames(receiver) == 2, "motion behind the slow injection did not merge").ConfigureAwait(false);
+                    sink.Resume.Set();
+                    await Until(() => sink.ButtonUp, "button release was not injected").ConfigureAwait(false);
+                    if (sink.X != 201 || sink.Y != 400) throw new Exception("merged motion lost distance: " + sink.X + "," + sink.Y);
+                    if (sink.Moves != 2) throw new Exception("backlog replayed " + sink.Moves + " moves instead of 2");
+                    if (sink.MovedAfterUp) throw new Exception("motion crossed the button release");
+                }
+                controller.Disconnect("test complete"); await MustEnd(listen, "receiver cleanup").ConfigureAwait(false);
+            }
+        }
+
+        private static int QueuedFrames(PairedInputReceiver receiver)
+        {
+            return ((InboundFrameQueue)typeof(PairedInputReceiver).GetField("_queue", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(receiver)).Count;
+        }
+
+        private sealed class PausedMotionSink : IFailSafeInputSink, IDisposable
+        {
+            public readonly ManualResetEventSlim Entered = new ManualResetEventSlim();
+            public readonly ManualResetEventSlim Resume = new ManualResetEventSlim();
+            public volatile int X, Y, Moves;
+            public volatile bool ButtonUp, MovedAfterUp;
+            public bool Publish(InputEvent value)
+            {
+                if (value.Kind == InputKind.MouseDelta)
+                {
+                    if (Moves == 0) { Entered.Set(); if (!Resume.Wait(3000)) throw new Exception("paused injection timed out"); }
+                    X += value.X; Y += value.Y; Moves++;
+                    if (ButtonUp) MovedAfterUp = true;
+                }
+                else if (value.Kind == InputKind.MouseButtonUp) ButtonUp = true;
+                return true;
+            }
+            public void ReleaseAll() { }
+            public void Dispose() { Resume.Set(); Entered.Dispose(); Resume.Dispose(); }
+        }
 
         private sealed class PausedSink : IFailSafeInputSink, IDisposable
         {

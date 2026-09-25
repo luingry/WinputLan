@@ -22,6 +22,7 @@ namespace WinputLan.Tests
             Run("pin store abstraction", TestPins);
             Run("queue coalescing and order", TestQueue);
             Run("queue coalesce clear leaves no phantom permit", TestQueueSignals);
+            Run("inbound queue merges waiting motion only", TestInboundQueue);
             Run("LAN IPv4 selection prefers routed Ethernet/Wi-Fi", TestLanAddressSelection);
             Run("rolling latency window is p50 and throttled", TestLatencyWindow);
             Run("input audit filters duplicates and throttles high frequency", TestInputAuditPolicy);
@@ -164,6 +165,36 @@ namespace WinputLan.Tests
                 try { wait.GetAwaiter().GetResult(); throw new InvalidOperationException("cancelled queue wait completed"); }
                 catch (OperationCanceledException) { }
             }
+        }
+
+        private static void TestInboundQueue()
+        {
+            Func<InputEvent, Frame> input = value => new Frame(FrameType.Input, 1, FrameCodec.EncodeInput(value));
+            var queue = new InboundFrameQueue();
+            Assert(!queue.Enqueue(input(InputEvent.MouseDelta(3, -1, 5)), 0), "first delta is queued");
+            Assert(queue.Enqueue(input(InputEvent.MouseDelta(4, 2, 6)), 0), "waiting deltas merge");
+            queue.Enqueue(input(InputEvent.MouseButton(InputKind.MouseButtonUp, 0x0202, 7)), 0);
+            queue.Enqueue(input(InputEvent.MouseDelta(1, 1, 8)), 0);
+            Assert(!queue.Enqueue(input(InputEvent.MouseDelta(1, 1, 9)), 1), "motion never merges across an epoch");
+            queue.Enqueue(new Frame(FrameType.ReleaseAll, 2, new byte[0]), 1);
+            Assert(!queue.Enqueue(input(InputEvent.MouseDelta(2, 2, 10)), 1), "motion never merges across a control frame");
+            queue.Enqueue(new Frame(FrameType.Input, 3, new byte[] { 1 }), 1);
+            InboundFrameQueue.Entry entry;
+            Assert(queue.TryDequeue(out entry) && entry.Input.Kind == InputKind.MouseDelta && entry.Input.X == 7 && entry.Input.Y == 1 && entry.Input.TimestampUtcTicks == 5, "merged motion is summed and keeps the oldest timestamp");
+            Assert(queue.TryDequeue(out entry) && entry.Input.Kind == InputKind.MouseButtonUp, "release keeps its place mid-drag");
+            Assert(queue.TryDequeue(out entry) && entry.Input.X == 1 && entry.Epoch == 0, "motion after release is not merged across it");
+            Assert(queue.TryDequeue(out entry) && entry.Epoch == 1, "new epoch starts a new entry");
+            Assert(queue.TryDequeue(out entry) && entry.Frame.Type == FrameType.ReleaseAll && entry.Input == null, "control frame order");
+            Assert(queue.TryDequeue(out entry) && entry.Input.X == 2, "motion after control frame");
+            Assert(queue.TryDequeue(out entry) && entry.Frame.Type == FrameType.Input && entry.Input == null, "invalid payload is kept for auditing");
+            queue.Enqueue(input(InputEvent.MouseDelta(1, 1, 11)), 1);
+            queue.Clear();
+            InboundFrameQueue.Entry blocked = null;
+            var waiter = System.Threading.Tasks.Task.Run(() => queue.TryDequeue(out blocked));
+            Assert(!waiter.Wait(50), "cleared queue blocks the injector");
+            queue.Complete();
+            Assert(waiter.Wait(1000) && !waiter.Result, "complete releases a blocked injector");
+            Assert(!queue.Enqueue(input(InputEvent.MouseDelta(1, 1, 12)), 1) && queue.Count == 0, "completed queue accepts nothing");
         }
 
         private static void TestLanAddressSelection()

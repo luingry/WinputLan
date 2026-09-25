@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.16] - 2026-09-25
+
+### Fixed
+
+- Keep dragging responsive on the controlled PC: received mouse motion now merges while the target is busy injecting, instead of replaying a growing backlog event by event. Clicks, keys and releases keep their order.
+
 ## [0.3.15] - 2026-09-24
 
 ### Fixed
