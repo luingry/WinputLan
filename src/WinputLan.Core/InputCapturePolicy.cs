@@ -77,8 +77,9 @@ namespace WinputLan.Core
     // terminal key, Win) would type, repeat or open something on the machine that receives it.
     public static class ModifierHandover
     {
-        // Unassigned virtual key tapped around a moved Alt so its lone press/release cannot open a menu bar.
-        public const ushort MenuMaskKey = 0xFF;
+        // Unassigned virtual key tapped around a moved Alt so its release cannot open a menu bar. Not 0xFF: some
+        // keyboards and hotkey tools use it, and a held Ctrl+Alt+Shift turned the tap into a screenshot shortcut.
+        public const ushort MenuMaskKey = 0xE8;
 
         public static bool IsHandoverKey(uint id)
         {
@@ -86,5 +87,23 @@ namespace WinputLan.Core
         }
 
         public static bool IsAlt(uint id) { return id == 0x12 || id == 0xA4 || id == 0xA5; }
+        public static bool IsCtrl(uint id) { return id == 0x11 || id == 0xA2 || id == 0xA3; }
+
+        // Alt goes first: pressed first, the keys after it cancel its menu; released first, a held Ctrl keeps it
+        // from being a menu key. So the mask tap, itself a chord with the held keys, is only needed without Ctrl.
+        public static List<uint> Order(IEnumerable<uint> keys)
+        {
+            var ordered = new List<uint>();
+            foreach (var key in keys) if (IsAlt(key)) ordered.Add(key);
+            foreach (var key in keys) if (!IsAlt(key)) ordered.Add(key);
+            return ordered;
+        }
+
+        public static bool NeedsMenuMask(IList<uint> keys)
+        {
+            var alt = false;
+            foreach (var key in keys) { if (IsCtrl(key)) return false; alt |= IsAlt(key); }
+            return alt;
+        }
     }
 }

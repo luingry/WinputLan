@@ -308,6 +308,11 @@ namespace WinputLan.Tests
             Assert(routing.Press(ctrl) == InputRoute.Local && routing.Release(ctrl) == InputRoute.Local, "handed-back modifier repeats and releases locally");
             Assert(routing.Release(left) == InputRoute.Local, "remote presses are forgotten after ReleaseAll");
             Assert(ModifierHandover.IsHandoverKey(0xA5) && ModifierHandover.IsAlt(0xA5) && !ModifierHandover.IsHandoverKey(0x5C) && !ModifierHandover.IsHandoverKey('2'), "handover set is Ctrl/Shift/Alt only");
+            var order = ModifierHandover.Order(new uint[] { 0xA2, 0xA0, 0xA4 });
+            Assert(order[0] == 0xA4 && order.Count == 3, "Alt is replayed first");
+            Assert(!ModifierHandover.NeedsMenuMask(new uint[] { 0xA2, 0xA4, 0xA0 }), "Ctrl+Alt+Shift needs no mask tap, which would itself be a chord");
+            Assert(ModifierHandover.NeedsMenuMask(new uint[] { 0xA4 }) && ModifierHandover.NeedsMenuMask(new uint[] { 0xA0, 0xA5 }) && !ModifierHandover.NeedsMenuMask(new uint[] { 0xA0 }), "Alt without Ctrl is masked");
+            Assert(ModifierHandover.MenuMaskKey != 0xFF, "mask key is not the vendor-used 0xFF");
             Assert(routing.Continuous() == InputRoute.Local && routing.Press(two) == InputRoute.Local, "local machine owns input again");
             Assert(InputRoutingState.ButtonId(0x0201) != InputRoutingState.KeyId(0x01), "button ids never collide with virtual keys");
         }

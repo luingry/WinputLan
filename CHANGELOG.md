@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.19] - 2026-09-28
+
+### Fixed
+
+- Switching control with Ctrl+Alt+Shift held no longer fires a screenshot (or other) shortcut on the controlling PC. The key tap that keeps a carried-over Alt from opening a menu bar formed a chord with the held modifiers; it is now skipped when Ctrl is held (Ctrl already prevents the menu) and uses the unassigned key 0xE8 instead of 0xFF.
+
 ## [0.3.18] - 2026-09-28
 
 ### Changed

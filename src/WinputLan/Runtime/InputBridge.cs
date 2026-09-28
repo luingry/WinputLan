@@ -156,27 +156,27 @@ namespace WinputLan.Runtime
         private void HandOverModifiers(IList<uint> handed, bool toRemote)
         {
             var presses = new List<InputEvent>();
-            foreach (var id in handed)
+            foreach (var id in ModifierHandover.Order(handed))
             {
                 InputEvent press;
                 if (_heldModifiers.TryGetValue((ushort)id, out press)) presses.Add(press);
             }
             if (presses.Count == 0) return;
-            var alt = presses.Exists(p => ModifierHandover.IsAlt(p.VirtualKey));
+            var mask = ModifierHandover.NeedsMenuMask(presses.ConvertAll(p => (uint)p.VirtualKey));
             if (toRemote)
             {
                 var released = new List<InputEvent>();
                 // A press the router refuses stays unreleased here; its physical release then passes through locally.
                 foreach (var press in presses) if (_sink.Publish(Replay(press, InputKind.KeyDown))) released.Add(press);
-                if (alt) TapMenuMask(_sink);
+                if (mask) TapMenuMask(_sink);
                 if (released.Count == 0) return;
-                if (alt) TapMenuMask(_localInjector);
+                if (mask) TapMenuMask(_localInjector);
                 foreach (var press in released) _localInjector.Publish(Replay(press, InputKind.KeyUp));
             }
             else
             {
                 foreach (var press in presses) _localInjector.Publish(Replay(press, InputKind.KeyDown));
-                if (alt) TapMenuMask(_localInjector);
+                if (mask) TapMenuMask(_localInjector);
             }
         }
 

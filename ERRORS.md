@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-09-28 - Troca de controle dispara atalho de screenshot no PC controlador (0.3.18)
+
+- Sintoma: com a transferência de modificadores da 0.3.18, trocar para o PC 2 ou voltar com Ctrl+Alt+Shift+N disparava um atalho de captura de tela no PC 1.
+- Causa raiz: para impedir que o Alt transferido abrisse a barra de menus, o PC 1 recebia um toque da tecla "máscara" VK 0xFF enquanto Ctrl+Alt+Shift ainda estavam pressionados (injetados ao voltar, ou antes de soltá-los ao sair). Isso formava o atalho Ctrl+Alt+Shift+0xFF, e alguns teclados e ferramentas de atalho usam a VK 0xFF.
+- Solução: o toque de máscara só é enviado quando o Alt vai sem Ctrl (com Ctrl, o Alt não é tecla de menu). O Alt é pressionado e solto primeiro (`ModifierHandover.Order`). A máscara usa a VK 0xE8, que não tem uso atribuído (é o padrão do AutoHotkey).
+- Prevenção: qualquer tecla injetada enquanto há modificadores pressionados é um atalho. Evite injetar teclas extras durante a troca. Teste Core `input routing keeps press/release pairs on one machine`.
+
 ## 2026-09-25 - Cursor "grudento" nos limites e rajadas de pacotes no Wi-Fi (0.3.17)
 
 - Sintoma 1: depois de empurrar o cursor contra um limite no PC controlado (área presa por ClipCursor, vão entre monitores de tamanhos diferentes), ao voltar o mouse o cursor ficava parado por um trecho.
