@@ -46,6 +46,9 @@ namespace WinputLan.Runtime
         private readonly IHotkeyChordDetector _hotkeyChordDetector;
         private readonly Func<HotkeyAction, bool> _hotkeyAction;
         private readonly HashSet<ushort> _suppressedHotkeyUps = new HashSet<ushort>();
+        // Physically held modifier -> its press, so a switch can replay it with the original scan code and flags.
+        private readonly Dictionary<ushort, InputEvent> _heldModifiers = new Dictionary<ushort, InputEvent>();
+        private readonly SendInputSink _localInjector = new SendInputSink();
         private readonly InputRoutingState _routing = new InputRoutingState();
         private readonly CursorVisibilityGuard _cursorVisibility = CursorVisibilityGuard.Shared;
         private NativeMethods.HookProc _keyboardProc;
@@ -115,7 +118,8 @@ namespace WinputLan.Runtime
             }
             finally
             {
-                ApplyRemote(false);
+                // The loop no longer pumps, so injected keys would stall on our own hook: nothing is handed back.
+                ApplyRemote(false, false);
                 if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
                 if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
                 _keyboardHook = IntPtr.Zero;
@@ -123,7 +127,7 @@ namespace WinputLan.Runtime
             }
         }
 
-        private void ApplyRemote(bool active)
+        private void ApplyRemote(bool active, bool handOver = true)
         {
             if (active == _routing.RemoteActive) return;
             if (active)
@@ -135,15 +139,52 @@ namespace WinputLan.Runtime
                 NativeMethods.GetCursorPos(out _restore);
                 _anchor = AnchorFor(_restore);
                 NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
-                _routing.SetRemoteActive(true);
+                HandOverModifiers(_routing.SetRemoteActive(true), true);
                 _cursorVisibility.TryHide();
             }
             else
             {
-                _routing.SetRemoteActive(false);
+                var handed = _routing.SetRemoteActive(false);
+                if (handOver) HandOverModifiers(handed, false);
                 _cursorVisibility.Show();
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
             }
+        }
+
+        // Held Ctrl/Shift/Alt keep working after a switch: they are pressed on the machine taking control and
+        // released on this one when it gives control away. The remote is reset by ReleaseAll when control returns.
+        private void HandOverModifiers(IList<uint> handed, bool toRemote)
+        {
+            var presses = new List<InputEvent>();
+            foreach (var id in handed)
+            {
+                InputEvent press;
+                if (_heldModifiers.TryGetValue((ushort)id, out press)) presses.Add(press);
+            }
+            if (presses.Count == 0) return;
+            var alt = presses.Exists(p => ModifierHandover.IsAlt(p.VirtualKey));
+            if (toRemote)
+            {
+                var released = new List<InputEvent>();
+                // A press the router refuses stays unreleased here; its physical release then passes through locally.
+                foreach (var press in presses) if (_sink.Publish(Replay(press, InputKind.KeyDown))) released.Add(press);
+                if (alt) TapMenuMask(_sink);
+                if (released.Count == 0) return;
+                if (alt) TapMenuMask(_localInjector);
+                foreach (var press in released) _localInjector.Publish(Replay(press, InputKind.KeyUp));
+            }
+            else
+            {
+                foreach (var press in presses) _localInjector.Publish(Replay(press, InputKind.KeyDown));
+                if (alt) TapMenuMask(_localInjector);
+            }
+        }
+
+        private static InputEvent Replay(InputEvent press, InputKind kind) { return InputEvent.Key(kind, press.VirtualKey, press.ScanCode, press.Flags, DateTime.UtcNow.Ticks); }
+
+        private static void TapMenuMask(IInputSink sink)
+        {
+            if (sink.Publish(InputEvent.Key(InputKind.KeyDown, ModifierHandover.MenuMaskKey, 0, 0, DateTime.UtcNow.Ticks))) sink.Publish(InputEvent.Key(InputKind.KeyUp, ModifierHandover.MenuMaskKey, 0, 0, DateTime.UtcNow.Ticks));
         }
 
         // Windows clamps hook positions to the screen, so motion towards an edge the cursor touches would be lost.
@@ -182,6 +223,7 @@ namespace WinputLan.Runtime
                     if (kind.HasValue)
                     {
                         var value = InputEvent.Key(kind.Value, (ushort)data.VirtualKey, (ushort)data.ScanCode, data.Flags, DateTime.UtcNow.Ticks);
+                        if (ModifierHandover.IsHandoverKey(value.VirtualKey)) { if (kind.Value == InputKind.KeyDown) _heldModifiers[value.VirtualKey] = value; else _heldModifiers.Remove(value.VirtualKey); }
                         HotkeyAction? action;
                         if (_hotkeyChordDetector != null && _hotkeyChordDetector.TryHandle(value, out action))
                         {

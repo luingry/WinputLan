@@ -289,19 +289,25 @@ namespace WinputLan.Tests
         {
             var routing = new InputRoutingState();
             uint ctrl = InputRoutingState.KeyId(0xA2), two = InputRoutingState.KeyId((ushort)'2'), a = InputRoutingState.KeyId((ushort)'A');
-            // Switch to remote while the chord modifier is physically held: its release must stay local.
-            Assert(routing.Press(ctrl) == InputRoute.Local, "modifier pressed before switching is local");
-            routing.SetRemoteActive(true);
-            Assert(routing.Press(ctrl) == InputRoute.Local && routing.Press(ctrl) == InputRoute.Local, "held-key repeats preserve their original local owner");
-            Assert(routing.Release(ctrl) == InputRoute.Local, "local press is released locally, never stuck");
+            uint shift = InputRoutingState.KeyId(0xA0), win = InputRoutingState.KeyId(0x5B), b = InputRoutingState.KeyId((ushort)'B');
+            // Switch to remote while the chord modifiers are physically held: they move with control, other keys stay.
+            Assert(routing.Press(ctrl) == InputRoute.Local && routing.Press(shift) == InputRoute.Local && routing.Press(win) == InputRoute.Local && routing.Press(b) == InputRoute.Local, "keys pressed before switching are local");
+            var handed = routing.SetRemoteActive(true);
+            Assert(handed.Count == 2 && handed.Contains(ctrl) && handed.Contains(shift), "only held Ctrl/Shift/Alt are handed to the remote");
+            Assert(routing.SetRemoteActive(true).Count == 0, "repeating the switch hands nothing over");
+            Assert(routing.Press(ctrl) == InputRoute.Remote && routing.Release(ctrl) == InputRoute.Remote && routing.Release(shift) == InputRoute.Remote, "handed modifiers repeat and release on the remote");
+            Assert(routing.Press(b) == InputRoute.Local && routing.Release(b) == InputRoute.Local && routing.Release(win) == InputRoute.Local, "other held keys preserve their local owner, never stuck");
             Assert(routing.Press(a) == InputRoute.Remote && routing.Release(a) == InputRoute.Remote, "keys typed during control go remote");
             Assert(routing.Continuous() == InputRoute.Remote, "motion and wheel go remote while active");
             var left = InputRoutingState.ButtonId(0x0201);
             Assert(routing.Press(left) == InputRoute.Remote, "click during control goes remote");
             // Return chord pressed remotely: after switching back, stray releases are handled locally and harmlessly.
             Assert(routing.Press(ctrl) == InputRoute.Remote, "return chord modifier is forwarded");
-            routing.SetRemoteActive(false);
-            Assert(routing.Release(ctrl) == InputRoute.Local && routing.Release(left) == InputRoute.Local, "remote presses are forgotten after ReleaseAll");
+            handed = routing.SetRemoteActive(false);
+            Assert(handed.Count == 1 && handed[0] == ctrl, "held return-chord modifier is handed back to this machine");
+            Assert(routing.Press(ctrl) == InputRoute.Local && routing.Release(ctrl) == InputRoute.Local, "handed-back modifier repeats and releases locally");
+            Assert(routing.Release(left) == InputRoute.Local, "remote presses are forgotten after ReleaseAll");
+            Assert(ModifierHandover.IsHandoverKey(0xA5) && ModifierHandover.IsAlt(0xA5) && !ModifierHandover.IsHandoverKey(0x5C) && !ModifierHandover.IsHandoverKey('2'), "handover set is Ctrl/Shift/Alt only");
             Assert(routing.Continuous() == InputRoute.Local && routing.Press(two) == InputRoute.Local, "local machine owns input again");
             Assert(InputRoutingState.ButtonId(0x0201) != InputRoutingState.KeyId(0x01), "button ids never collide with virtual keys");
         }

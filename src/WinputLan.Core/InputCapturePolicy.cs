@@ -11,6 +11,7 @@ namespace WinputLan.Core
     // While remote control is active every local input is suppressed and forwarded.
     // A release always follows its press: a key pressed locally before switching is released
     // locally, so modifiers from the switch chord never stay stuck on either machine.
+    // Held Ctrl/Shift/Alt are the exception: they move to the machine that takes control, which then owns their release.
     public sealed class InputRoutingState
     {
         private readonly object _gate = new object();
@@ -20,13 +21,22 @@ namespace WinputLan.Core
 
         public bool RemoteActive { get { lock (_gate) return _remoteActive; } }
 
-        public void SetRemoteActive(bool active)
+        // Returns the held modifiers handed to the machine that now has control. The caller presses them there
+        // and releases them on the machine that lost control.
+        public IList<uint> SetRemoteActive(bool active)
         {
             lock (_gate)
             {
+                var handed = new List<uint>();
+                if (active == _remoteActive) return handed;
                 _remoteActive = active;
+                var from = active ? _localDown : _remoteDown;
+                var to = active ? _remoteDown : _localDown;
+                foreach (var id in from) if (ModifierHandover.IsHandoverKey(id)) handed.Add(id);
+                foreach (var id in handed) { from.Remove(id); to.Add(id); }
                 // The remote side is reset by ReleaseAll when control returns, so its presses are forgotten here.
                 if (!active) _remoteDown.Clear();
+                return handed;
             }
         }
 
@@ -61,5 +71,20 @@ namespace WinputLan.Core
         // Keys and mouse buttons share one id space: mouse buttons use ids above the 0..255 virtual-key range.
         public static uint KeyId(ushort virtualKey) { return virtualKey; }
         public static uint ButtonId(uint buttonMessage) { return 0x10000u | buttonMessage; }
+    }
+
+    // Only Ctrl, Shift and Alt follow a switch: alone they do nothing, while any other held key (the chord's
+    // terminal key, Win) would type, repeat or open something on the machine that receives it.
+    public static class ModifierHandover
+    {
+        // Unassigned virtual key tapped around a moved Alt so its lone press/release cannot open a menu bar.
+        public const ushort MenuMaskKey = 0xFF;
+
+        public static bool IsHandoverKey(uint id)
+        {
+            return id == 0x10 || id == 0x11 || id == 0x12 || (id >= 0xA0 && id <= 0xA5);
+        }
+
+        public static bool IsAlt(uint id) { return id == 0x12 || id == 0xA4 || id == 0xA5; }
     }
 }

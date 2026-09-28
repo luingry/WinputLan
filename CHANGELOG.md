@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.18] - 2026-09-28
+
+### Changed
+
+- Ctrl, Shift and Alt still held when control switches now carry over to the PC that takes control, so a shortcut like Ctrl+Alt+Shift+2 can be followed at once by other keys without pressing the modifiers again. The chord's own key (the 2) and other held keys are not carried over.
+
 ## [0.3.17] - 2026-09-25
 
 ### Changed
