@@ -6,6 +6,7 @@
 - Causa raiz: para impedir que o Alt transferido abrisse a barra de menus, o PC 1 recebia um toque da tecla "máscara" VK 0xFF enquanto Ctrl+Alt+Shift ainda estavam pressionados (injetados ao voltar, ou antes de soltá-los ao sair). Isso formava o atalho Ctrl+Alt+Shift+0xFF, e alguns teclados e ferramentas de atalho usam a VK 0xFF.
 - Solução: o toque de máscara só é enviado quando o Alt vai sem Ctrl (com Ctrl, o Alt não é tecla de menu). O Alt é pressionado e solto primeiro (`ModifierHandover.Order`). A máscara usa a VK 0xE8, que não tem uso atribuído (é o padrão do AutoHotkey).
 - Prevenção: qualquer tecla injetada enquanto há modificadores pressionados é um atalho. Evite injetar teclas extras durante a troca. Teste Core `input routing keeps press/release pairs on one machine`.
+- Atualização 0.3.20: o usuário testou e confirmou que soltar Ctrl+Alt+Shift não abre menus, então toda a proteção do Alt foi removida e nenhuma tecla extra é injetada. O desenho para reimplementar está em `docs/INPUT.md` ("Alt menu guard").
 
 ## 2026-09-25 - Cursor "grudento" nos limites e rajadas de pacotes no Wi-Fi (0.3.17)
 

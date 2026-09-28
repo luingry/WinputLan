@@ -31,7 +31,8 @@ notification-area icon with Restore and Exit; Exit alone performs final cleanup.
 Input events have fixed-size binary payloads. The queue refuses to reorder
 keyboard/button events. Only a consecutive tail `MouseMove` is replaced; a
 full queue never evicts a key or button. Any failed remote route clears the
-queue, releases tracked state, and returns to local-safe behavior.
+queue, releases tracked state, and returns to local-safe behavior. Held
+Ctrl/Shift/Alt follow a control switch; see `docs/INPUT.md`.
 
 The UI is intentionally a compact operating surface: local machine, active
 target, pairing, shortcuts, and a metadata-only log. The visual thesis is

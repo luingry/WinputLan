@@ -156,36 +156,23 @@ namespace WinputLan.Runtime
         private void HandOverModifiers(IList<uint> handed, bool toRemote)
         {
             var presses = new List<InputEvent>();
-            foreach (var id in ModifierHandover.Order(handed))
+            foreach (var id in handed)
             {
                 InputEvent press;
                 if (_heldModifiers.TryGetValue((ushort)id, out press)) presses.Add(press);
             }
-            if (presses.Count == 0) return;
-            var mask = ModifierHandover.NeedsMenuMask(presses.ConvertAll(p => (uint)p.VirtualKey));
             if (toRemote)
             {
-                var released = new List<InputEvent>();
                 // A press the router refuses stays unreleased here; its physical release then passes through locally.
-                foreach (var press in presses) if (_sink.Publish(Replay(press, InputKind.KeyDown))) released.Add(press);
-                if (mask) TapMenuMask(_sink);
-                if (released.Count == 0) return;
-                if (mask) TapMenuMask(_localInjector);
-                foreach (var press in released) _localInjector.Publish(Replay(press, InputKind.KeyUp));
+                foreach (var press in presses) if (_sink.Publish(Replay(press, InputKind.KeyDown))) _localInjector.Publish(Replay(press, InputKind.KeyUp));
             }
             else
             {
                 foreach (var press in presses) _localInjector.Publish(Replay(press, InputKind.KeyDown));
-                if (mask) TapMenuMask(_localInjector);
             }
         }
 
         private static InputEvent Replay(InputEvent press, InputKind kind) { return InputEvent.Key(kind, press.VirtualKey, press.ScanCode, press.Flags, DateTime.UtcNow.Ticks); }
-
-        private static void TapMenuMask(IInputSink sink)
-        {
-            if (sink.Publish(InputEvent.Key(InputKind.KeyDown, ModifierHandover.MenuMaskKey, 0, 0, DateTime.UtcNow.Ticks))) sink.Publish(InputEvent.Key(InputKind.KeyUp, ModifierHandover.MenuMaskKey, 0, 0, DateTime.UtcNow.Ticks));
-        }
 
         // Windows clamps hook positions to the screen, so motion towards an edge the cursor touches would be lost.
         // Keep the cursor in place unless it is within AnchorEdgeMargin of its monitor's edge; then nudge it inward.

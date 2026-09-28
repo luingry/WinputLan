@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.20] - 2026-09-28
+
+### Changed
+
+- Removed the Alt menu-bar guard from the modifier carry-over: switching control now injects no key other than the held Ctrl/Shift/Alt themselves. Releasing the switch chord was verified not to open application menus.
+
 ## [0.3.19] - 2026-09-28
 
 ### Fixed
