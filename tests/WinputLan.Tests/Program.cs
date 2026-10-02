@@ -30,6 +30,7 @@ namespace WinputLan.Tests
             Run("rolling latency window is p50 and throttled", TestLatencyWindow);
             Run("input audit filters duplicates and throttles high frequency", TestInputAuditPolicy);
             Run("input routing keeps press/release pairs on one machine", TestInputRouting);
+            Run("handed-back modifier never sticks behind its release", TestHandoverReplayGuard);
             Run("outbound cancellation cannot update a newer attempt", TestRequestAttemptOwnership);
             Run("hotkey validation", TestHotkeys);
             Run("hotkey hook bypass", TestHotkeyBypass);
@@ -351,6 +352,29 @@ namespace WinputLan.Tests
             Assert(routing.AnyLocalButtonDown, "a held local button blocks edge switching");
             routing.Release(left);
             Assert(!routing.AnyLocalButtonDown, "released button unblocks it");
+        }
+
+        private static void TestHandoverReplayGuard()
+        {
+            const ushort ctrl = 0xA2, shift = 0xA0, alt = 0xA4;
+            var guard = new HandoverReplayGuard();
+            // Usual order: the injected press lands, then the physical release releases it.
+            guard.Injecting(ctrl);
+            Assert(!guard.ShouldSwallowInjectedPress(ctrl), "a press seen before its release goes through");
+            guard.PhysicalRelease(ctrl);
+            // Race: the release was waiting for the hook thread and lands before the injected press.
+            guard.Injecting(shift);
+            guard.PhysicalRelease(shift);
+            Assert(guard.ShouldSwallowInjectedPress(shift), "a press landing after its release is swallowed, so Shift does not stick");
+            Assert(!guard.ShouldSwallowInjectedPress(shift), "only that one press is swallowed");
+            // A release with nothing injected, and a failed injection, leave later presses alone.
+            guard.PhysicalRelease(alt);
+            guard.Injecting(alt);
+            Assert(!guard.ShouldSwallowInjectedPress(alt), "an older release does not cancel a newer press");
+            guard.Injecting(ctrl);
+            guard.NotInjected(ctrl);
+            guard.PhysicalRelease(ctrl);
+            Assert(!guard.ShouldSwallowInjectedPress(ctrl), "a failed injection leaves nothing pending");
         }
 
         private static void TestInputRouting()

@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.25] - 2026-10-02
+
+### Fixed
+
+- Ctrl, Shift or Alt no longer stay stuck down on the controlling PC after taking control back with the shortcut. When the keys were released while the switch was still running, Windows applied the release before the replayed press that hands the modifiers back, leaving them pressed until they were pressed and released again. A replayed press that arrives after its key's release is now dropped.
+
 ## [0.3.24] - 2026-10-02
 
 ### Fixed

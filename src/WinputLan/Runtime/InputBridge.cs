@@ -57,7 +57,8 @@ namespace WinputLan.Runtime
         private readonly HashSet<ushort> _suppressedHotkeyUps = new HashSet<ushort>();
         // Physically held modifier -> its press, so a switch can replay it with the original scan code and flags.
         private readonly Dictionary<ushort, InputEvent> _heldModifiers = new Dictionary<ushort, InputEvent>();
-        private readonly SendInputSink _localInjector = new SendInputSink();
+        private readonly SendInputSink _localInjector = new SendInputSink(SendInputSink.HandoverTag);
+        private readonly HandoverReplayGuard _replayGuard = new HandoverReplayGuard();
         private readonly InputRoutingState _routing = new InputRoutingState();
         private readonly CursorVisibilityGuard _cursorVisibility = CursorVisibilityGuard.Shared;
         private NativeMethods.HookProc _keyboardProc;
@@ -274,7 +275,12 @@ namespace WinputLan.Runtime
             }
             else
             {
-                foreach (var press in presses) _localInjector.Publish(Replay(press, InputKind.KeyDown));
+                // A release already waiting for this thread lands before these presses; the hook then swallows them.
+                foreach (var press in presses)
+                {
+                    _replayGuard.Injecting(press.VirtualKey);
+                    if (!_localInjector.Publish(Replay(press, InputKind.KeyDown))) _replayGuard.NotInjected(press.VirtualKey);
+                }
             }
         }
 
@@ -309,14 +315,19 @@ namespace WinputLan.Runtime
             if (code >= 0 && lParam != IntPtr.Zero)
             {
                 var data = (NativeMethods.KbdLlHookStruct)Marshal.PtrToStructure(lParam, typeof(NativeMethods.KbdLlHookStruct));
-                if ((data.Flags & LlkhfInjected) == 0 && data.ExtraInfo.ToInt64() != SendInputSink.InputTag)
+                if ((data.Flags & LlkhfInjected) != 0 && data.ExtraInfo.ToInt64() == SendInputSink.HandoverTag)
+                {
+                    var down = wParam.ToInt32() == NativeMethods.WmKeyDown || wParam.ToInt32() == NativeMethods.WmSysKeyDown;
+                    if (down && _replayGuard.ShouldSwallowInjectedPress((ushort)data.VirtualKey)) return (IntPtr)1;
+                }
+                else if ((data.Flags & LlkhfInjected) == 0 && data.ExtraInfo.ToInt64() != SendInputSink.InputTag)
                 {
                     var message = wParam.ToInt32();
                     var kind = message == NativeMethods.WmKeyDown || message == NativeMethods.WmSysKeyDown ? InputKind.KeyDown : message == NativeMethods.WmKeyUp || message == NativeMethods.WmSysKeyUp ? InputKind.KeyUp : (InputKind?)null;
                     if (kind.HasValue)
                     {
                         var value = InputEvent.Key(kind.Value, (ushort)data.VirtualKey, (ushort)data.ScanCode, data.Flags, DateTime.UtcNow.Ticks);
-                        if (ModifierHandover.IsHandoverKey(value.VirtualKey)) { if (kind.Value == InputKind.KeyDown) _heldModifiers[value.VirtualKey] = value; else _heldModifiers.Remove(value.VirtualKey); }
+                        if (ModifierHandover.IsHandoverKey(value.VirtualKey)) { if (kind.Value == InputKind.KeyDown) _heldModifiers[value.VirtualKey] = value; else { _heldModifiers.Remove(value.VirtualKey); _replayGuard.PhysicalRelease(value.VirtualKey); } }
                         HotkeyAction? action;
                         if (_hotkeyChordDetector != null && _hotkeyChordDetector.TryHandle(value, out action))
                         {
@@ -374,6 +385,12 @@ namespace WinputLan.Runtime
     public sealed class SendInputSink : IFailSafeInputSink, IEdgePortalSink
     {
         public const long InputTag = 0x57494E505554;
+        // Marks the controller's own modifier replays, so its hook can tell them from input injected for a remote PC.
+        public const long HandoverTag = InputTag + 1;
+        private readonly long _tag;
+
+        public SendInputSink() : this(InputTag) { }
+        public SendInputSink(long tag) { _tag = tag; }
         public const uint HorizontalWheelFlag = 1;
         // After this idle gap the virtual cursor resyncs with the real one, which the local user or an app may have
         // moved. Injected motion is applied well within it, so an in-sync cursor resyncs to the same point.
@@ -404,7 +421,7 @@ namespace WinputLan.Runtime
             var input = new NativeMethods.INPUT { Type = NativeMethods.InputKeyboard };
             if (value.Kind == InputKind.KeyDown || value.Kind == InputKind.KeyUp)
             {
-                input.Data.Keyboard = new NativeMethods.KEYBDINPUT { Vk = value.VirtualKey, Scan = value.ScanCode, Flags = KeyInjection.SendInputFlags(value.Kind, value.Flags), Time = 0, ExtraInfo = new IntPtr(InputTag) };
+                input.Data.Keyboard = new NativeMethods.KEYBDINPUT { Vk = value.VirtualKey, Scan = value.ScanCode, Flags = KeyInjection.SendInputFlags(value.Kind, value.Flags), Time = 0, ExtraInfo = new IntPtr(_tag) };
             }
             else
             {
@@ -465,7 +482,7 @@ namespace WinputLan.Runtime
                     flags = value.Flags == HorizontalWheelFlag ? NativeMethods.MouseEventHWheel : NativeMethods.MouseEventWheel;
                     mouseData = unchecked((uint)(short)value.MouseData);
                 }
-                input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = dx, Dy = dy, MouseData = mouseData, Flags = flags, Time = 0, ExtraInfo = new IntPtr(InputTag) };
+                input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = dx, Dy = dy, MouseData = mouseData, Flags = flags, Time = 0, ExtraInfo = new IntPtr(_tag) };
             }
             uint sent;
             try { sent = NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf(typeof(NativeMethods.INPUT))); }
@@ -523,7 +540,7 @@ namespace WinputLan.Runtime
                     EdgePortal.PointAt(edge, primary, fraction, EdgePortal.SpawnInset, out x, out y);
                     _cursorX = x; _cursorY = y; _hasCursor = true; _lastDeltaTick = tick;
                     _edgeArmed = false; _edgeTouch = -1; _edgeSinceTick = tick;
-                    input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = PointerCoordinates.ToAbsolute(x, left, width), Dy = PointerCoordinates.ToAbsolute(y, top, height), Flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk, ExtraInfo = new IntPtr(InputTag) };
+                    input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = PointerCoordinates.ToAbsolute(x, left, width), Dy = PointerCoordinates.ToAbsolute(y, top, height), Flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk, ExtraInfo = new IntPtr(_tag) };
                 }
                 return NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf(typeof(NativeMethods.INPUT))) == 1;
             }

@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-10-02 - Modificadores do atalho presos no PC controlador após voltar (0.3.18–0.3.24)
+
+- Sintoma: às vezes, depois de trocar com o atalho (Ctrl+Shift+Alt+N), Ctrl/Shift/Alt ficavam pressionados e era preciso apertá-los de novo para soltar.
+- Causa raiz (dedução, sem reprodução ao vivo): ao devolver o controle ao PC local, `HandOverModifiers` injeta, a partir da thread do hook, o "pressionar" dos modificadores ainda seguros. Se o usuário já tinha soltado as teclas, o "soltar" físico ficava esperando a thread do hook, ocupada com a troca. O Windows processa a entrada em ordem, então aplicava o "soltar" e depois o "pressionar" injetado, e a tecla ficava presa. A ida para o PC remoto não sofre disso: o remoto recebe o "pressionar" antes do "soltar".
+- Solução: as injeções da transferência usam uma tag própria (`SendInputSink.HandoverTag`). O `HandoverReplayGuard` (Core) registra a injeção pendente; se o "soltar" físico chega ao hook antes do "pressionar" injetado, o hook descarta esse "pressionar".
+- Prevenção: qualquer injeção feita na thread do hook entra na fila depois dos eventos físicos que já estão esperando por ela. Teste Core `handed-back modifier never sticks behind its release`.
+
 ## 2026-10-02 - Na volta pela extremidade, o cursor retomava de onde tinha saído (0.3.22–0.3.23)
 
 - Sintoma: ao voltar do PC controlado pela extremidade, o cursor do PC controlador aparecia onde o controle tinha saído, não na posição equivalente. Os logs mostravam a fração certa nos dois PCs (`touched`/`restored-edge` iguais).

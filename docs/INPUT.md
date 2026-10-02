@@ -9,6 +9,7 @@ When control switches, the Ctrl, Shift and Alt keys that are still physically he
   - to the remote: KeyDown through the router, then an injected KeyUp on this PC;
   - back to local: an injected KeyDown on this PC. The remote is released by `ReleaseAll`.
 - The physical release then goes to the new owner. The chord's terminal key is suppressed by the hotkey detector, and Win and every other key keep their original owner.
+- **Release before replay (0.3.25).** A physical release can already be waiting for the hook thread while it hands modifiers back to this PC. Windows then applies that release first and the injected press after it, so the key stays down. Replays use their own tag (`SendInputSink.HandoverTag`); `HandoverReplayGuard` sees the release arrive before the replayed press and the hook swallows that press.
 
 ## Alt menu guard (removed in 0.3.20; reimplement only if needed)
 

@@ -83,6 +83,32 @@ namespace WinputLan.Core
     // terminal key, Win) would type, repeat or open something on the machine that receives it.
     // A moved Alt gets no menu-bar guard: releasing the switch chord was verified not to open menus. If it ever
     // does, see "Alt menu guard" in docs/INPUT.md for the design that was removed in 0.3.20.
+    // Handing modifiers back to this PC injects their presses from the hook thread. A physical release may already be
+    // waiting for that thread; Windows then applies the release first and the injected press after it, leaving the
+    // key stuck down. The hook sees both in that order, so a release seen before its injected press cancels the press.
+    // Hook thread only.
+    public sealed class HandoverReplayGuard
+    {
+        private readonly HashSet<ushort> _pending = new HashSet<ushort>();
+        private readonly HashSet<ushort> _cancelled = new HashSet<ushort>();
+
+        // Called just before the press is injected.
+        public void Injecting(ushort virtualKey) { _pending.Add(virtualKey); _cancelled.Remove(virtualKey); }
+
+        // The injection failed, so no press will follow.
+        public void NotInjected(ushort virtualKey) { _pending.Remove(virtualKey); _cancelled.Remove(virtualKey); }
+
+        // A physical release of the key reached the hook.
+        public void PhysicalRelease(ushort virtualKey) { if (_pending.Contains(virtualKey)) _cancelled.Add(virtualKey); }
+
+        // The injected press reached the hook: true when it must be swallowed because its key was already released.
+        public bool ShouldSwallowInjectedPress(ushort virtualKey)
+        {
+            if (!_pending.Remove(virtualKey)) return false;
+            return _cancelled.Remove(virtualKey);
+        }
+    }
+
     public static class ModifierHandover
     {
         public static bool IsHandoverKey(uint id)
