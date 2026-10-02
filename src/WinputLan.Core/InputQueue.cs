@@ -86,6 +86,17 @@ namespace WinputLan.Core
             }
         }
 
+        // Blocking twin for a dedicated sender thread: no thread-pool hop between the hook and the wire.
+        public Entry DequeueEntry(CancellationToken cancellationToken)
+        {
+            while (true)
+            {
+                _available.Wait(cancellationToken);
+                Entry value;
+                if (TryDequeueEntry(out value)) return value;
+            }
+        }
+
         public bool TryDequeue(out InputEvent value)
         {
             Entry entry;

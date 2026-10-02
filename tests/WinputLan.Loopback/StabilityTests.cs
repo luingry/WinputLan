@@ -25,7 +25,50 @@ namespace WinputLan.Loopback
             await ReceiverDisconnectAsync(targetCert, controllerCert).ConfigureAwait(false);
             await SlowInjectionMergesMotionAsync(targetCert, controllerCert).ConfigureAwait(false);
             await MotionPacingAsync(targetCert, controllerCert).ConfigureAwait(false);
-            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge, paced motion");
+            await StarvedPoolDeliveryAsync(targetCert, controllerCert).ConfigureAwait(false);
+            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge, paced motion, starved thread pool");
+        }
+
+        // Send and receive run on their own threads, so input keeps flowing while every pool worker is busy.
+        // On the pool, the controller's drain waited for a worker (added only every ~0.5 s once saturated).
+        private static async Task StarvedPoolDeliveryAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert)
+        {
+            using (var target = new PeerTransport()) using (var controller = new PeerTransport())
+            {
+                var port = FreePort(); var listen = target.ListenOnceAsync(port, targetCert, null, true, CancellationToken.None);
+                await controller.ConnectAsync("127.0.0.1", port, controllerCert, null, true, CancellationToken.None).ConfigureAwait(false);
+                await Until(() => target.ObservedRemoteFingerprint != null, "starved-pool TLS publication").ConfigureAwait(false);
+                target.SetInputDirection(false, true); controller.SetInputDirection(true, false); target.MarkPaired(); controller.MarkPaired();
+                var sink = new OrderSink();
+                using (var receiver = new PairedInputReceiver(target, sink))
+                using (var router = new InputRouter(new InputEventQueue(), controller, new TrackingSink()))
+                {
+                    int workers, io;
+                    ThreadPool.GetMinThreads(out workers, out io);
+                    var release = new ManualResetEventSlim();
+                    var entered = new CountdownEvent(workers);
+                    // Extra blockers stay queued, so any work queued after them waits for new pool threads.
+                    for (var i = 0; i < workers + 8; i++) ThreadPool.QueueUserWorkItem(_ => { try { entered.Signal(); } catch (InvalidOperationException) { } release.Wait(); });
+                    long elapsed;
+                    try
+                    {
+                        if (!entered.Wait(5000)) throw new Exception("thread pool did not saturate");
+                        // No awaits from here on: their continuations would need the starved pool too.
+                        router.SetRemoteActive(true);
+                        var watch = Stopwatch.StartNew();
+                        router.Publish(InputEvent.MouseButton(InputKind.MouseButtonDown, 0x0201, DateTime.UtcNow.Ticks));
+                        while (!sink.Order.Contains("down") && watch.ElapsedMilliseconds < 3000) Thread.Sleep(1);
+                        elapsed = watch.ElapsedMilliseconds;
+                    }
+                    finally { release.Set(); }
+                    if (!sink.Order.Contains("down")) throw new Exception("click never arrived while the thread pool was saturated");
+                    if (elapsed > 250) throw new Exception("click waited " + elapsed + " ms for the saturated thread pool");
+                    Console.WriteLine("STARVED POOL: click delivered in {0} ms with every pool worker blocked", elapsed);
+                    router.SetRemoteActive(false);
+                }
+                controller.Disconnect("test complete"); target.Disconnect("test complete");
+                await MustEnd(listen, "starved-pool listener cleanup").ConfigureAwait(false);
+            }
         }
 
         private static PeerTransport FastTransport()

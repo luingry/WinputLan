@@ -1,5 +1,13 @@
 # Errors and prevention
 
+## 2026-10-02 - Envio e recebimento de input dependiam do thread pool (0.3.21)
+
+- Sintoma (risco de jitter): com o PC ocupado, o trecho entre o hook e o socket (controlador) e entre o socket e o injetor (controlado) rodava em threads do pool em prioridade normal, enquanto hook e injetor rodam em `Highest`. Com o pool saturado, um clique não chegava nem em 3 s.
+- Causa raiz: no .NET Framework, `SemaphoreSlim.Release` põe o waiter de `WaitAsync` na fila do thread pool, então cada evento do dreno do `InputRouter` esperava uma thread do pool e depois uma completion de I/O do `WriteAsync`. O `ReceiveLoopAsync` lia o socket de forma síncrona e prendia uma thread do pool a sessão inteira. Com o pool saturado, o .NET Framework só cria uma thread nova a cada ~0,5 s.
+- Solução: o dreno do `InputRouter` roda numa thread dedicada `Highest` com `DequeueEntry`/`SendIfCurrent` síncronos (mesmo `_sendGate` e sequência dos envios assíncronos). O loop de leitura do `PeerTransport` roda numa thread dedicada `Highest`; `ListenOnceAsync` aguarda o fim dela por um `TaskCompletionSource`. As mudanças de foco saem por `Task.Run`; as epochs tornam a ordem irrelevante.
+- Armadilha: exceção que escapa de uma thread dedicada encerra o processo. Os dois loops têm um catch final que encerra a sessão em vez disso.
+- Prevenção: o loopback `starved thread pool` bloqueia todos os workers do pool e exige o clique em até 250 ms (o código antigo falha nele); o teste Core de sinais da fila cobre o dequeue bloqueante.
+
 ## 2026-09-28 - Troca de controle dispara atalho de screenshot no PC controlador (0.3.18)
 
 - Sintoma: com a transferência de modificadores da 0.3.18, trocar para o PC 2 ou voltar com Ctrl+Alt+Shift+N disparava um atalho de captura de tela no PC 1.

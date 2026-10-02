@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.21] - 2026-10-02
+
+### Changed
+
+- Input now leaves and arrives on dedicated high-priority threads instead of the .NET thread pool. On the controller, each event used to wait for a pool thread wake-up and an I/O completion at normal priority; on the controlled PC, the socket reader held a normal-priority pool thread while the injector ran at the highest priority. A busy PC (game, build) no longer adds jitter there, and a saturated thread pool no longer stalls input. The wire protocol is unchanged.
+
 ## [0.3.20] - 2026-09-28
 
 ### Changed

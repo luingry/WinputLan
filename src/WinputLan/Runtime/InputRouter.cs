@@ -25,6 +25,10 @@ namespace WinputLan.Runtime
         public static readonly TimeSpan DefaultMotionInterval = TimeSpan.FromMilliseconds(4);
         private readonly long _motionIntervalTicks;
         private long _lastMotionTimestamp;
+        // The drain runs on its own thread at the hook's priority. On the thread pool every event waited for a
+        // pool wake-up (SemaphoreSlim queues async waiters there on .NET Framework) and an I/O completion, at
+        // normal priority, so a busy controller added jitter between the hook and the wire.
+        private readonly Thread _drain;
 
         public InputRouter(InputEventQueue queue, PeerTransport transport, IInputSink releaseSink) : this(queue, transport, releaseSink, DefaultMotionInterval) { }
 
@@ -37,7 +41,9 @@ namespace WinputLan.Runtime
             _motionIntervalTicks = (long)(motionInterval.TotalSeconds * Stopwatch.Frequency);
             _transport.StateChanged += Transport_StateChanged;
             _transport.FrameReceived += Transport_FrameReceived;
-            _ = DrainLoopAsync(_cts.Token);
+            var token = _cts.Token;
+            _drain = new Thread(() => DrainLoop(token)) { IsBackground = true, Name = "WinputLan input send", Priority = ThreadPriority.Highest };
+            _drain.Start();
         }
 
         public event Action<InputKind, string> InputAudited;
@@ -77,7 +83,9 @@ namespace WinputLan.Runtime
                 epoch = ++_activationEpoch;
                 if (!active) _queue.Clear();
             }
-            _ = ApplyFocusAsync(epoch, active, _cts.Token);
+            // Sends block, so they leave the caller (UI or hotkey thread); epochs make their order irrelevant.
+            var token = _cts.Token;
+            _ = Task.Run(() => ApplyFocus(epoch, active, token));
             if (!active) ReleaseAll();
         }
 
@@ -96,21 +104,21 @@ namespace WinputLan.Runtime
             lock (_stateGate) return !_disposed && epoch == _activationEpoch && _remoteActive == active && !_overflowed;
         }
 
-        private async Task DrainLoopAsync(CancellationToken token)
+        private void DrainLoop(CancellationToken token)
         {
             var pacer = _motionIntervalTicks > 0 ? HighResolutionWait.TryCreate() : null;
             try
             {
                 while (true)
                 {
-                    var entry = await _queue.DequeueEntryAsync(token).ConfigureAwait(false);
+                    var entry = _queue.DequeueEntry(token);
                     if (entry.Value.Kind == InputKind.MouseDelta) entry = PaceMotion(entry, pacer, token);
-                    await _focusGate.WaitAsync(token).ConfigureAwait(false);
+                    _focusGate.Wait(token);
                     try
                     {
                         if (!IsCurrent(entry.Epoch, true)) { InputAudited?.Invoke(entry.Value.Kind, "dropped-inactive"); continue; }
-                        await AnnounceFocusLockedAsync(entry.Epoch, token).ConfigureAwait(false);
-                        var sent = await _transport.SendIfCurrentAsync(FrameType.Input, FrameCodec.EncodeInput(entry.Value), () => IsCurrent(entry.Epoch, true), token).ConfigureAwait(false);
+                        AnnounceFocusLocked(entry.Epoch, token);
+                        var sent = _transport.SendIfCurrent(FrameType.Input, FrameCodec.EncodeInput(entry.Value), () => IsCurrent(entry.Epoch, true), token);
                         InputAudited?.Invoke(entry.Value.Kind, sent ? "sent" : "dropped-inactive");
                     }
                     catch (OperationCanceledException) when (token.IsCancellationRequested) { return; }
@@ -119,6 +127,8 @@ namespace WinputLan.Runtime
                 }
             }
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+            // A dedicated thread must never let an exception escape: that would end the process.
+            catch { }
             finally { pacer?.Dispose(); }
         }
 
@@ -142,19 +152,19 @@ namespace WinputLan.Runtime
             return _queue.MergeFollowingMotion(entry);
         }
 
-        private async Task ApplyFocusAsync(long epoch, bool active, CancellationToken token)
+        private void ApplyFocus(long epoch, bool active, CancellationToken token)
         {
             try
             {
-                await _focusGate.WaitAsync(token).ConfigureAwait(false);
+                _focusGate.Wait(token);
                 try
                 {
                     if (!IsCurrent(epoch, active)) return;
-                    if (active) await AnnounceFocusLockedAsync(epoch, token).ConfigureAwait(false);
+                    if (active) AnnounceFocusLocked(epoch, token);
                     else
                     {
-                        await _transport.SendIfCurrentAsync(FrameType.ControlFocus, new byte[] { 0 }, () => IsCurrent(epoch, false), token).ConfigureAwait(false);
-                        await _transport.SendIfCurrentAsync(FrameType.ReleaseAll, new byte[0], () => IsCurrent(epoch, false), token).ConfigureAwait(false);
+                        _transport.SendIfCurrent(FrameType.ControlFocus, new byte[] { 0 }, () => IsCurrent(epoch, false), token);
+                        _transport.SendIfCurrent(FrameType.ReleaseAll, new byte[0], () => IsCurrent(epoch, false), token);
                     }
                 }
                 finally { _focusGate.Release(); }
@@ -163,12 +173,12 @@ namespace WinputLan.Runtime
             catch { if (IsCurrent(epoch, active)) _transport.Disconnect("focus send failed"); }
         }
 
-        private async Task AnnounceFocusLockedAsync(long epoch, CancellationToken token)
+        private void AnnounceFocusLocked(long epoch, CancellationToken token)
         {
             if (_announcedEpoch == epoch || !IsCurrent(epoch, true)) return;
             // Also reset when a fast off/on supersedes an unfocus that hadn't reached the wire yet.
-            await _transport.SendIfCurrentAsync(FrameType.ReleaseAll, new byte[0], () => IsCurrent(epoch, true), token).ConfigureAwait(false);
-            if (await _transport.SendIfCurrentAsync(FrameType.ControlFocus, new byte[] { 1 }, () => IsCurrent(epoch, true), token).ConfigureAwait(false)) _announcedEpoch = epoch;
+            _transport.SendIfCurrent(FrameType.ReleaseAll, new byte[0], () => IsCurrent(epoch, true), token);
+            if (_transport.SendIfCurrent(FrameType.ControlFocus, new byte[] { 1 }, () => IsCurrent(epoch, true), token)) _announcedEpoch = epoch;
         }
 
         private void Transport_FrameReceived(Frame frame)

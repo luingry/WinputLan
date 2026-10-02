@@ -132,7 +132,7 @@ namespace WinputLan.Runtime
                     }
                     CancellationToken receiveToken;
                     lock (_gate) { if (generation != _generation || _connectionCts == null) return; receiveToken = _connectionCts.Token; }
-                    await ReceiveLoopAsync(stream, generation, receiveToken).ConfigureAwait(false);
+                    await StartReceiveThread(stream, generation, receiveToken).ConfigureAwait(false);
                 }
             }
             catch (Exception) when (lifetime.IsCancellationRequested) { throw new OperationCanceledException(lifetime.Token); }
@@ -164,30 +164,64 @@ namespace WinputLan.Runtime
 
         internal async Task<bool> SendIfCurrentAsync(FrameType type, byte[] payload, Func<bool> isCurrent, CancellationToken cancellationToken)
         {
-            if (type == FrameType.Input && !_allowsInputSend) throw new InvalidOperationException("This session is not permitted to send input.");
             SslStream stream;
             CancellationToken connectionToken;
             long generation;
-            lock (_gate) { stream = _stream; generation = _generation; connectionToken = _connectionCts == null ? CancellationToken.None : _connectionCts.Token; }
-            if (stream == null) throw new IOException("Peer is not connected.");
+            SnapshotStream(type, out stream, out generation, out connectionToken);
             using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectionToken))
             {
                 await _sendGate.WaitAsync(linked.Token).ConfigureAwait(false);
-                // The sequence is taken inside the send gate so wire order always matches sequence order;
-                // numbering first let concurrent senders (heartbeat, input, ACK) reach the wire out of order,
-                // which the receiver rejects by closing the connection.
                 // SslStream.WriteAsync commits the complete TLS record; FlushAsync added a scheduler hop without improving delivery.
                 try
                 {
-                    lock (_gate) if (generation != _generation || !ReferenceEquals(stream, _stream)) throw new IOException("Connection was superseded.");
-                    if (isCurrent != null && !isCurrent()) return false;
-                    if (type == FrameType.Input && !_allowsInputSend) throw new IOException("Input direction changed.");
-                    var bytes = FrameCodec.Encode(type, unchecked((ulong)Interlocked.Increment(ref _sequence)), payload);
+                    var bytes = EncodeIfCurrent(type, payload, isCurrent, stream, generation);
+                    if (bytes == null) return false;
                     await stream.WriteAsync(bytes, 0, bytes.Length, linked.Token).ConfigureAwait(false);
                     return true;
                 }
                 finally { _sendGate.Release(); }
             }
+        }
+
+        // Blocking send for dedicated input threads: the write completes on the caller, without an I/O
+        // completion hop. It shares the gate and sequence with the async senders.
+        internal bool SendIfCurrent(FrameType type, byte[] payload, Func<bool> isCurrent, CancellationToken cancellationToken)
+        {
+            SslStream stream;
+            CancellationToken connectionToken;
+            long generation;
+            SnapshotStream(type, out stream, out generation, out connectionToken);
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, connectionToken))
+            {
+                _sendGate.Wait(linked.Token);
+                try
+                {
+                    var bytes = EncodeIfCurrent(type, payload, isCurrent, stream, generation);
+                    if (bytes == null) return false;
+                    // A blocked write is released by the connection token, which closes the socket.
+                    stream.Write(bytes, 0, bytes.Length);
+                    return true;
+                }
+                finally { _sendGate.Release(); }
+            }
+        }
+
+        private void SnapshotStream(FrameType type, out SslStream stream, out long generation, out CancellationToken connectionToken)
+        {
+            if (type == FrameType.Input && !_allowsInputSend) throw new InvalidOperationException("This session is not permitted to send input.");
+            lock (_gate) { stream = _stream; generation = _generation; connectionToken = _connectionCts == null ? CancellationToken.None : _connectionCts.Token; }
+            if (stream == null) throw new IOException("Peer is not connected.");
+        }
+
+        // Runs inside the send gate. The sequence is taken there so wire order always matches sequence order;
+        // numbering first let concurrent senders (heartbeat, input, ACK) reach the wire out of order,
+        // which the receiver rejects by closing the connection. Null means the caller's epoch has ended.
+        private byte[] EncodeIfCurrent(FrameType type, byte[] payload, Func<bool> isCurrent, SslStream stream, long generation)
+        {
+            lock (_gate) if (generation != _generation || !ReferenceEquals(stream, _stream)) throw new IOException("Connection was superseded.");
+            if (isCurrent != null && !isCurrent()) return null;
+            if (type == FrameType.Input && !_allowsInputSend) throw new IOException("Input direction changed.");
+            return FrameCodec.Encode(type, unchecked((ulong)Interlocked.Increment(ref _sequence)), payload);
         }
 
         public void MarkPaired() { if (State == PeerConnectionState.Pairing) SetState(PeerConnectionState.Connected, "TLS ativo · peer pinned"); }
@@ -295,7 +329,7 @@ namespace WinputLan.Runtime
             var publishedGeneration = generation;
             _ = Task.Run(() => RunHeartbeatAsync(publishedGeneration, token));
             _ = Task.Run(() => WatchHeartbeatAsync(publishedGeneration, token));
-            if (receiveInBackground) _ = Task.Run(() => ReceiveLoopAsync(stream, publishedGeneration, token));
+            if (receiveInBackground) _ = StartReceiveThread(stream, publishedGeneration, token);
             return true;
         }
 
@@ -329,7 +363,19 @@ namespace WinputLan.Runtime
             catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         }
 
-        private async Task ReceiveLoopAsync(SslStream stream, long generation, CancellationToken cancellationToken)
+        // The reader blocks on the socket for the whole session, so it gets its own thread at the injector's
+        // priority instead of pinning a normal-priority pool thread that a busy PC schedules late.
+        // The task completes when the reader ends.
+        private Task StartReceiveThread(SslStream stream, long generation, CancellationToken cancellationToken)
+        {
+            var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var thread = new Thread(() => { try { ReceiveLoop(stream, generation, cancellationToken); } finally { done.TrySetResult(true); } })
+            { IsBackground = true, Name = "WinputLan receive", Priority = ThreadPriority.Highest };
+            thread.Start();
+            return done.Task;
+        }
+
+        private void ReceiveLoop(SslStream stream, long generation, CancellationToken cancellationToken)
         {
             try
             {
@@ -342,7 +388,7 @@ namespace WinputLan.Runtime
                         if (frame.Sequence <= _lastReceivedSequence) throw new InvalidDataException("Frame sequence is not strictly increasing.");
                         _lastReceivedSequence = frame.Sequence;
                     }
-                    if (frame.Type == FrameType.Heartbeat && _respondToHeartbeats) await SendAsync(FrameType.HeartbeatAck, new byte[0], cancellationToken).ConfigureAwait(false);
+                    if (frame.Type == FrameType.Heartbeat && _respondToHeartbeats) SendIfCurrent(FrameType.HeartbeatAck, new byte[0], null, cancellationToken);
                     else if (frame.Type == FrameType.HeartbeatAck) { lock (_gate) if (generation == _generation) _lastHeartbeatAckTick = Stopwatch.GetTimestamp(); }
                     else FrameReceived?.Invoke(frame);
                 }
@@ -351,6 +397,9 @@ namespace WinputLan.Runtime
             {
                 if (!cancellationToken.IsCancellationRequested) EndGeneration(generation, ex is EndOfStreamException ? "peer closed" : ex.Message, true);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            // An exception escaping a dedicated thread would end the process; fault this session instead.
+            catch (Exception ex) { if (!cancellationToken.IsCancellationRequested) EndGeneration(generation, ex.Message, true); }
             finally { EndGeneration(generation, "peer closed", false); }
         }
 

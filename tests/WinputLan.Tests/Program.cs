@@ -167,6 +167,25 @@ namespace WinputLan.Tests
                 try { wait.GetAwaiter().GetResult(); throw new InvalidOperationException("cancelled queue wait completed"); }
                 catch (OperationCanceledException) { }
             }
+            // The blocking dequeue used by the dedicated sender thread follows the same permits.
+            queue.Enqueue(InputEvent.MouseDelta(1, 1, 3), 5);
+            queue.Enqueue(InputEvent.MouseDelta(2, 2, 4), 5);
+            using (var cancellation = new System.Threading.CancellationTokenSource(1000))
+            {
+                var entry = queue.DequeueEntry(cancellation.Token);
+                Assert(entry.Value.X == 3 && entry.Epoch == 5, "blocking dequeue returns the coalesced head");
+            }
+            using (var cancellation = new System.Threading.CancellationTokenSource())
+            {
+                var blocked = System.Threading.Tasks.Task.Run(() => queue.DequeueEntry(cancellation.Token));
+                Assert(!blocked.Wait(20), "coalesced motion leaves no extra permit for the blocking dequeue");
+                queue.Enqueue(InputEvent.Key(InputKind.KeyDown, 0x41, 0x1E, 0, 5), 5);
+                Assert(blocked.Wait(1000) && blocked.Result.Value.Kind == InputKind.KeyDown, "an enqueue wakes the blocking dequeue");
+                var cancelled = System.Threading.Tasks.Task.Run(() => queue.DequeueEntry(cancellation.Token));
+                cancellation.Cancel();
+                try { cancelled.Wait(1000); throw new InvalidOperationException("cancelled blocking dequeue completed"); }
+                catch (AggregateException ex) when (ex.InnerException is OperationCanceledException) { }
+            }
         }
 
         private static void TestInboundQueue()
