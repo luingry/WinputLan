@@ -9,6 +9,8 @@ namespace WinputLan.Runtime
     {
         private readonly PeerTransport _transport;
         private readonly IInputSink _sink;
+        // Edge switching on this side: places the arriving cursor and reports touches of this PC's edge.
+        private readonly IEdgePortalSink _portal;
         private volatile bool _disposed;
         private readonly object _inputGate = new object();
         // The socket reader only queues frames; this thread injects them. Motion that arrives while an
@@ -27,6 +29,7 @@ namespace WinputLan.Runtime
         {
             _transport = transport ?? throw new ArgumentNullException("transport");
             _sink = sink ?? throw new ArgumentNullException("sink");
+            _portal = sink as IEdgePortalSink;
             _injector = new Thread(InjectLoop) { IsBackground = true, Name = "WinputLan input injection", Priority = ThreadPriority.Highest };
             _injector.Start();
             _transport.FrameReceived += Transport_FrameReceived;
@@ -43,7 +46,7 @@ namespace WinputLan.Runtime
             _disposed = true;
             _transport.FrameReceived -= Transport_FrameReceived;
             _transport.StateChanged -= Transport_StateChanged;
-            lock (_inputGate) { _focused = false; _epoch++; _queue.Complete(); ReleaseAll(); }
+            lock (_inputGate) { _focused = false; _epoch++; _queue.Complete(); ReleaseAll(); _portal?.SetPortalEdge(ScreenEdge.None); }
         }
 
         private void Transport_FrameReceived(Frame frame)
@@ -58,25 +61,44 @@ namespace WinputLan.Runtime
             {
                 // A disconnect must release inputs after an in-flight injection has finished, never before.
                 long? ack = null;
-                lock (_inputGate) { if (!_disposed && entry.Epoch == _epoch) HandleFrame(entry, out ack); }
+                int? edgeFraction = null;
+                lock (_inputGate) { if (!_disposed && entry.Epoch == _epoch) HandleFrame(entry, out ack, out edgeFraction); }
                 // Don't acquire the transport gate while holding the injection gate: state callbacks
                 // can originate under the transport gate during connection publication.
-                if (ack.HasValue) _ = SendAckAsync(ack.Value);
+                if (edgeFraction.HasValue) _ = SendFrameAsync(FrameType.EdgeReached, EdgePortal.EncodeReached(edgeFraction.Value));
+                if (ack.HasValue) _ = SendFrameAsync(FrameType.InputAck, BitConverter.GetBytes(ack.Value));
             }
         }
 
-        private void HandleFrame(InboundFrameQueue.Entry entry, out long? ack)
+        private void HandleFrame(InboundFrameQueue.Entry entry, out long? ack, out int? edgeFraction)
         {
             ack = null;
+            edgeFraction = null;
             var frame = entry.Frame;
-            if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll))
+            if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll || frame.Type == FrameType.EdgePortal))
             {
                 InputAudited?.Invoke(InputKind.KeyDown, "dropped-direction");
                 return;
             }
             if (frame.Type == FrameType.ControlFocus)
             {
-                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1) { _focused = frame.Payload[0] == 1; if (!_focused) ReleaseAll(); FocusChanged?.Invoke(_focused); }
+                if (_transport.AllowsInputReceive && frame.Payload != null && frame.Payload.Length == 1)
+                {
+                    _focused = frame.Payload[0] == 1;
+                    // Each focus starts without an edge; an EdgePortal frame right behind it sets one.
+                    _portal?.SetPortalEdge(ScreenEdge.None);
+                    if (!_focused) ReleaseAll();
+                    FocusChanged?.Invoke(_focused);
+                }
+                return;
+            }
+            if (frame.Type == FrameType.EdgePortal)
+            {
+                ScreenEdge edge;
+                int? place;
+                if (_portal == null || !_focused || _transport.State != PeerConnectionState.Connected || !EdgePortal.TryDecodePortal(frame.Payload, out edge, out place)) return;
+                _portal.SetPortalEdge(edge);
+                if (place.HasValue && EdgePortal.IsValid(edge)) _portal.PlaceAtEdge(edge, place.Value);
                 return;
             }
             if (frame.Type == FrameType.ReleaseAll)
@@ -96,11 +118,13 @@ namespace WinputLan.Runtime
             var tick = Environment.TickCount;
             var motion = input.Kind == InputKind.MouseDelta || input.Kind == InputKind.MouseMove;
             if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; ack = input.TimestampUtcTicks; }
+            int fraction;
+            if (accepted && input.Kind == InputKind.MouseDelta && _portal != null && _portal.TryTakeEdgeTouch(out fraction)) edgeFraction = fraction;
         }
 
-        private async System.Threading.Tasks.Task SendAckAsync(long timestampUtcTicks)
+        private async System.Threading.Tasks.Task SendFrameAsync(FrameType type, byte[] payload)
         {
-            try { await _transport.SendAsync(FrameType.InputAck, BitConverter.GetBytes(timestampUtcTicks), CancellationToken.None).ConfigureAwait(false); }
+            try { await _transport.SendAsync(type, payload, CancellationToken.None).ConfigureAwait(false); }
             catch { }
         }
 
@@ -112,6 +136,7 @@ namespace WinputLan.Runtime
                 _focused = false;
                 Interlocked.Increment(ref _epoch);
                 _queue.Clear();
+                _portal?.SetPortalEdge(ScreenEdge.None);
                 if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
             }
         }

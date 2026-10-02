@@ -31,6 +31,11 @@ namespace WinputLan.Core
         [DataMember(Order = 18)] public bool StartWithWindows { get; set; }
         // Recognized controllers (valid trust proof and unchanged certificate) start without the approval prompt.
         [DataMember(Order = 19)] public bool AutoAcceptKnownConnections { get; set; }
+        // Touching the chosen edge of this PC's primary monitor switches to the target, and the target's edge switches back.
+        // Missing in older config files (None); enabling the option then picks right/left.
+        [DataMember(Order = 20)] public bool EdgeSwitchEnabled { get; set; }
+        [DataMember(Order = 21)] public ScreenEdge LocalEdge { get; set; }
+        [DataMember(Order = 22)] public ScreenEdge RemoteEdge { get; set; }
 
         public static WinputConfig CreateDefault()
         {
@@ -42,7 +47,9 @@ namespace WinputLan.Core
                 RemotePort = 45900,
                 RequireSignedUpdates = true,
                 LocalHotkey = "Ctrl+Shift+Alt+1",
-                RemoteHotkey = "Ctrl+Shift+Alt+2"
+                RemoteHotkey = "Ctrl+Shift+Alt+2",
+                LocalEdge = ScreenEdge.Right,
+                RemoteEdge = ScreenEdge.Left
             };
         }
     }

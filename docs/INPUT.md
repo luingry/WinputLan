@@ -21,3 +21,13 @@ The design that was used in 0.3.19:
 3. **Use an unassigned mask key: VK 0xE8**, the AutoHotkey default. Never use VK 0xFF.
 
 **Pitfall (0.3.18):** the mask tap is itself a chord with the held modifiers. In 0.3.18, a VK 0xFF tap injected under Ctrl+Alt+Shift fired a screenshot shortcut on the controlling PC, because some keyboards and hotkey tools use VK 0xFF. Never inject an extra key while modifiers are held unless it is unavoidable. See `ERRORS.md`, 2026-09-28.
+
+## Edge switching (0.3.22)
+
+Optional ("Trocar computador pelas extremidades da tela"). Geometry and payloads live in `WinputLan.Core.EdgePortal`; the wire format is in `docs/PROTOCOL.md`.
+
+- **Controller to target.** `LowLevelInputCapture.TryLeaveThroughEdge` runs in the mouse hook for local motion. When the motion touches the chosen edge of the primary monitor, the move is swallowed (the cursor stays on the primary even with a monitor beyond that edge) and `SetInputTarget(true, fraction)` sends `EdgePortal` with a placement after `ControlFocus(1)`. `_restore` becomes the spot just inside the edge, so a return by shortcut lands there.
+- **Target to controller.** `SendInputSink.DetectEdgeTouch` checks the tracked cursor after each injected delta and records the touch; `PairedInputReceiver` sends `EdgeReached` after the injection. The controller then calls `LowLevelInputCapture.ReturnFromEdge`, which places the local cursor at the same fraction of its own edge instead of `_restore`.
+- **Shortcuts are unchanged.** They pass no fraction: the controller restores `_restore` and the target cursor stays put. With edge switching on, the shortcut focus still sends `EdgePortal` without a placement, so the target knows its edge.
+- **No ping-pong.** Each side disarms its edge on every switch and re-arms it only after the cursor is seen off the edge; the arriving cursor lands `SpawnInset` pixels inside. A 250 ms cooldown follows every switch.
+- **Blocked switches.** A held mouse button (drag, selection), a `ClipCursor` smaller than the virtual screen (games, window move loops), or a previous position off the primary monitor.

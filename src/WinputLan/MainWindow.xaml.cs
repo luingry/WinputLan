@@ -59,6 +59,7 @@ namespace WinputLan
         private string _inboundControllerName;
         private string _outboundNote;
         private bool _suppressStartupToggle;
+        private bool _suppressEdgeToggle;
         // Set when the switch shortcut starts a connection, so input moves to the target once it is ready.
         private bool _switchToRemoteWhenReady;
         private Forms.NotifyIcon _trayIcon;
@@ -82,6 +83,10 @@ namespace WinputLan
             LocalIpText.Text = "IP: " + LocalIPv4Address();
             BackgroundModeCheckBox.IsChecked = _config.ContinueInBackground;
             AutoAcceptKnownCheckBox.IsChecked = _config.AutoAcceptKnownConnections;
+            if (!EdgePortal.IsValid(_config.LocalEdge)) _config.LocalEdge = ScreenEdge.Right;
+            if (!EdgePortal.IsValid(_config.RemoteEdge)) _config.RemoteEdge = ScreenEdge.Left;
+            _suppressEdgeToggle = true; EdgeSwitchCheckBox.IsChecked = _config.EdgeSwitchEnabled; _suppressEdgeToggle = false;
+            RenderEdgeSettings();
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             _isElevated = ProcessElevation.IsCurrentElevated();
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
@@ -130,6 +135,7 @@ namespace WinputLan
                 _inputRouter = new InputRouter(_inputQueue, _transport, _inputSink);
                 _listenerInputReceiver = new PairedInputReceiver(_listenerTransport, _inputSink);
                 _inputRouter.InputAudited += AuditInput;
+                _inputRouter.EdgeReached += fraction => Dispatcher.BeginInvoke(new Action(() => { if (_remoteActive && EdgeSwitchActive) SetInputTarget(false, fraction); }));
                 _listenerInputReceiver.InputAudited += AuditInput;
                 _listenerInputReceiver.FocusChanged += focused => Dispatcher.BeginInvoke(new Action(() => { _inboundFocused = focused; RenderMachines(); }));
                 _listenerTransport.StateChanged += ListenerTransport_StateChanged;
@@ -661,10 +667,17 @@ namespace WinputLan
             }
         }
 
-        private void SetInputTarget(bool remote)
+        private void SetInputTarget(bool remote) { SetInputTarget(remote, null); }
+
+        // edgeFraction is set when the cursor crossed an edge: the position along the edge it left through,
+        // where the cursor of the PC taking control appears. Shortcuts pass null and keep each PC's cursor in place.
+        private void SetInputTarget(bool remote, int? edgeFraction)
         {
+            if (edgeFraction.HasValue && (remote == _remoteActive || !EdgeSwitchActive)) return;
             if (remote && (_transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend))
             {
+                // An edge touch never starts a connection; only the shortcut does.
+                if (edgeFraction.HasValue) return;
                 // The shortcut on a disconnected but recognised target starts a reconnection request.
                 if (HasRecognizedTarget) { _switchToRemoteWhenReady = true; if (_transport.State != PeerConnectionState.Connecting && _transport.State != PeerConnectionState.Pairing) _ = ConnectRecognizedAsync(); }
                 AddLog("local", "remote", "Target", "blocked-unpaired");
@@ -672,10 +685,56 @@ namespace WinputLan
             }
             _switchToRemoteWhenReady = false;
             _remoteActive = remote;
-            _inputRouter?.SetRemoteActive(remote);
-            _capture?.SetRemoteActive(remote);
+            // With edge switching on, the target always learns its edge; after an edge crossing also where to appear.
+            _inputRouter?.SetRemoteActive(remote, remote && EdgeSwitchActive ? EdgePortal.EncodePortal(_config.RemoteEdge, edgeFraction) : null);
+            if (_capture != null)
+            {
+                if (!edgeFraction.HasValue) _capture.SetRemoteActive(remote);
+                else if (remote) _capture.EnterRemoteFromEdge();
+                else _capture.ReturnFromEdge(edgeFraction.Value);
+            }
             RenderMachines();
-            AddLog("local", remote ? "remote" : "local", "Target", remote ? "selected" : "restored");
+            AddLog("local", remote ? "remote" : "local", "Target", (remote ? "selected" : "restored") + (edgeFraction.HasValue ? "-edge" : string.Empty));
+        }
+
+        private bool EdgeSwitchActive { get { return _config.EdgeSwitchEnabled && EdgePortal.IsValid(_config.LocalEdge) && EdgePortal.IsValid(_config.RemoteEdge); } }
+
+        private void EdgeSwitchCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEdgeToggle) return;
+            _config.EdgeSwitchEnabled = EdgeSwitchCheckBox.IsChecked == true;
+            SaveEdgeSettings();
+        }
+
+        private void LocalEdgeButton_Click(object sender, RoutedEventArgs e) { _config.LocalEdge = EdgePortal.Next(_config.LocalEdge); SaveEdgeSettings(); }
+        private void RemoteEdgeButton_Click(object sender, RoutedEventArgs e) { _config.RemoteEdge = EdgePortal.Next(_config.RemoteEdge); SaveEdgeSettings(); }
+
+        private void SaveEdgeSettings()
+        {
+            try { _configStore.Save(_config); } catch { }
+            RenderEdgeSettings();
+            AddLog("local", "local", "Edge", EdgeSwitchActive ? "on" : "off");
+        }
+
+        // The target learns its edge at the next switch; this PC's hook picks up its edge at once.
+        private void RenderEdgeSettings()
+        {
+            EdgeSwitchPanel.Visibility = _config.EdgeSwitchEnabled ? Visibility.Visible : Visibility.Collapsed;
+            LocalEdgeButton.Content = EdgeLabel(_config.LocalEdge);
+            RemoteEdgeButton.Content = EdgeLabel(_config.RemoteEdge);
+            if (_capture != null) _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
+        }
+
+        private static string EdgeLabel(ScreenEdge edge)
+        {
+            switch (edge)
+            {
+                case ScreenEdge.Left: return "Esquerda";
+                case ScreenEdge.Right: return "Direita";
+                case ScreenEdge.Top: return "Superior";
+                case ScreenEdge.Bottom: return "Inferior";
+                default: return "—";
+            }
         }
 
         private void Transport_StateChanged(PeerConnectionState state, string detail)
@@ -704,7 +763,8 @@ namespace WinputLan
             {
                 Dispatcher.BeginInvoke(new Action(() => SetInputTarget(action == HotkeyAction.SelectRemote)));
                 return true;
-            });
+            }, fraction => Dispatcher.BeginInvoke(new Action(() => SetInputTarget(true, fraction))));
+            _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
             _capture.Start();
             AddLog("local", "remote", "Hooks", "controller-active");
         }

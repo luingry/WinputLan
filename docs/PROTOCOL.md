@@ -12,7 +12,8 @@ The transport is a persistent TLS 1.2 stream. Every frame is little-endian:
 | 16 | n | payload |
 
 Types are `Hello`, `PairingOffer`, `PairingConfirm`, `Input`, `Heartbeat`,
-`HeartbeatAck`, `Goodbye`, `Error`, `ReleaseAll`, and `InputAck`.
+`HeartbeatAck`, `Goodbye`, `Error`, `ReleaseAll`, `InputAck`, `ControlFocus`,
+`EdgePortal` and `EdgeReached`.
 
 The fixed input record is 32 bytes: kind, reserved byte, flags, X, Y,
 mouse-data, virtual key, scan code, UTC ticks, and a reserved uint. Keyboard
@@ -83,3 +84,12 @@ controller.
 `ControlFocus` (11) carries one byte: 1 when the controller starts directing mouse and
 keyboard to the target, 0 when it takes them back. The target uses it only to show which
 machine is receiving input.
+
+## Edge switching (0.3.22)
+
+Only sent while the controller has "Trocar computador pelas extremidades da tela" on. Peers older than 0.3.22 close the session on these frame types, so both PCs must be updated before the option is turned on.
+
+- `EdgePortal` (12), controller to target, right after `ControlFocus(1)`. Four bytes: the target's edge (0 none, 1 left, 2 top, 3 right, 4 bottom), a placement flag (0 or 1), and a little-endian `uint16` fraction along that edge. With the flag set (control arrived through the controller's edge), the target moves its cursor to that fraction of its edge on its primary monitor, `EdgePortal.SpawnInset` pixels inside. Without it (shortcut switch), the cursor stays where it was. Every `ControlFocus` clears the target's edge first.
+- `EdgeReached` (13), target to controller. Two bytes: the little-endian `uint16` fraction where the target's tracked cursor touched its edge. The controller ignores it unless it is directing input at the target with edge switching on; otherwise it switches back and puts its own cursor at that fraction of its own edge.
+
+A touch counts only when the cursor was on the primary monitor before the motion, has been off the edge since control arrived, at least `EdgePortal.CooldownMs` have passed, no mouse button is held and the cursor is not confined by `ClipCursor`. The primary monitor is the one at the virtual-screen origin. Positions use physical pixels on both sides.

@@ -18,7 +18,12 @@ namespace WinputLan.Core
         ReleaseAll = 9,
         InputAck = 10,
         // Controller tells the target whether mouse and keyboard are currently directed at it (payload: 1 byte).
-        ControlFocus = 11
+        ControlFocus = 11,
+        // Controller -> target after ControlFocus(1), only with edge switching on: the target's edge and where its
+        // cursor appears (EdgePortal payload). Peers older than 0.3.22 close the session on it.
+        EdgePortal = 12,
+        // Target -> controller: its cursor touched its edge (EdgePortal payload).
+        EdgeReached = 13
     }
 
     public enum InputKind : byte

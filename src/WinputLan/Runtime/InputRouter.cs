@@ -20,6 +20,9 @@ namespace WinputLan.Runtime
         private bool _overflowed;
         private long _activationEpoch;
         private long _announcedEpoch = -1;
+        // Sent right after ControlFocus(1) of its epoch when edge switching is on (EdgePortal payload).
+        private byte[] _portal;
+        private long _portalEpoch = -1;
         // Continuous motion leaves at most once per interval, merged. A 1000 Hz mouse otherwise costs a TLS
         // record and a packet per sample, which Wi-Fi turns into jitter. Motion after a pause goes at once.
         public static readonly TimeSpan DefaultMotionInterval = TimeSpan.FromMilliseconds(4);
@@ -48,6 +51,8 @@ namespace WinputLan.Runtime
 
         public event Action<InputKind, string> InputAudited;
         public event Action<TimeSpan> InputLatencyMeasured;
+        // The target's cursor touched its edge while it had control (fraction along that edge).
+        public event Action<int> EdgeReached;
 
         public bool Publish(InputEvent value)
         {
@@ -73,7 +78,10 @@ namespace WinputLan.Runtime
             return true;
         }
 
-        public void SetRemoteActive(bool active)
+        public void SetRemoteActive(bool active) { SetRemoteActive(active, null); }
+
+        // portal: EdgePortal payload announced with the focus, or null when edge switching is off.
+        public void SetRemoteActive(bool active, byte[] portal)
         {
             long epoch;
             lock (_stateGate)
@@ -81,6 +89,8 @@ namespace WinputLan.Runtime
                 if (_disposed || (active && _overflowed) || active == _remoteActive) return;
                 _remoteActive = active;
                 epoch = ++_activationEpoch;
+                _portal = active ? portal : null;
+                _portalEpoch = epoch;
                 if (!active) _queue.Clear();
             }
             // Sends block, so they leave the caller (UI or hotkey thread); epochs make their order irrelevant.
@@ -178,11 +188,23 @@ namespace WinputLan.Runtime
             if (_announcedEpoch == epoch || !IsCurrent(epoch, true)) return;
             // Also reset when a fast off/on supersedes an unfocus that hadn't reached the wire yet.
             _transport.SendIfCurrent(FrameType.ReleaseAll, new byte[0], () => IsCurrent(epoch, true), token);
-            if (_transport.SendIfCurrent(FrameType.ControlFocus, new byte[] { 1 }, () => IsCurrent(epoch, true), token)) _announcedEpoch = epoch;
+            if (!_transport.SendIfCurrent(FrameType.ControlFocus, new byte[] { 1 }, () => IsCurrent(epoch, true), token)) return;
+            _announcedEpoch = epoch;
+            byte[] portal;
+            lock (_stateGate) portal = _portalEpoch == epoch ? _portal : null;
+            if (portal != null) _transport.SendIfCurrent(FrameType.EdgePortal, portal, () => IsCurrent(epoch, true), token);
         }
 
         private void Transport_FrameReceived(Frame frame)
         {
+            int fraction;
+            if (frame.Type == FrameType.EdgeReached && EdgePortal.TryDecodeReached(frame.Payload, out fraction))
+            {
+                bool active;
+                lock (_stateGate) active = !_disposed && _remoteActive && _portal != null;
+                if (active) EdgeReached?.Invoke(fraction);
+                return;
+            }
             if (frame.Type != FrameType.InputAck || frame.Payload == null || frame.Payload.Length != sizeof(long)) return;
             var sentTicks = BitConverter.ToInt64(frame.Payload, 0);
             if (sentTicks <= 0 || sentTicks > DateTime.UtcNow.Ticks) return;

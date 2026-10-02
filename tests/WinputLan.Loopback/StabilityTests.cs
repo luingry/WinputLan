@@ -26,7 +26,70 @@ namespace WinputLan.Loopback
             await SlowInjectionMergesMotionAsync(targetCert, controllerCert).ConfigureAwait(false);
             await MotionPacingAsync(targetCert, controllerCert).ConfigureAwait(false);
             await StarvedPoolDeliveryAsync(targetCert, controllerCert).ConfigureAwait(false);
-            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge, paced motion, starved thread pool");
+            await EdgeSwitchAsync(targetCert, controllerCert).ConfigureAwait(false);
+            Console.WriteLine("STABILITY PASS: TLS cancellation/timeout/retry, congested heartbeat, stale input rejection, focus recovery, full-queue release, slow-injection motion merge, paced motion, starved thread pool, edge switch frames");
+        }
+
+        // Edge switching: the target learns its edge and spawn spot with the focus, a shortcut focus sends no spot,
+        // and a touch on the target reaches the controller only while it has control with edge switching on.
+        private static async Task EdgeSwitchAsync(X509Certificate2 targetCert, X509Certificate2 controllerCert)
+        {
+            using (var target = new PeerTransport()) using (var controller = new PeerTransport())
+            {
+                var port = FreePort(); var listen = target.ListenOnceAsync(port, targetCert, null, true, CancellationToken.None);
+                await controller.ConnectAsync("127.0.0.1", port, controllerCert, null, true, CancellationToken.None).ConfigureAwait(false);
+                await Until(() => target.ObservedRemoteFingerprint != null, "target TLS publication").ConfigureAwait(false);
+                target.SetInputDirection(false, true); controller.SetInputDirection(true, false); target.MarkPaired(); controller.MarkPaired();
+                var sink = new PortalSink();
+                using (var receiver = new PairedInputReceiver(target, sink)) using (var router = new InputRouter(new InputEventQueue(), controller, new TrackingSink()))
+                {
+                    var reached = new List<int>();
+                    router.EdgeReached += fraction => { lock (reached) reached.Add(fraction); };
+                    // Edge crossing on the controller: the target is told its edge and where to appear.
+                    router.SetRemoteActive(true, EdgePortal.EncodePortal(ScreenEdge.Left, 30000));
+                    await Until(() => sink.Placed == 30000, "target cursor was not placed at the edge spot").ConfigureAwait(false);
+                    if (sink.Edge != ScreenEdge.Left || sink.PlacedEdge != ScreenEdge.Left) throw new Exception("target got the wrong edge");
+                    // A touch on the target is reported after the motion that caused it.
+                    sink.NextTouch = 12345;
+                    router.Publish(InputEvent.MouseDelta(-40, 0, DateTime.UtcNow.Ticks));
+                    await Until(() => { lock (reached) return reached.Count == 1 && reached[0] == 12345; }, "edge touch did not reach the controller").ConfigureAwait(false);
+                    // A shortcut switch keeps the target cursor where it is but still sets the edge.
+                    router.SetRemoteActive(false);
+                    await Until(() => sink.Edge == ScreenEdge.None, "unfocus did not clear the edge").ConfigureAwait(false);
+                    sink.Placed = -1;
+                    router.SetRemoteActive(true, EdgePortal.EncodePortal(ScreenEdge.Bottom, null));
+                    await Until(() => sink.Edge == ScreenEdge.Bottom, "shortcut focus did not set the edge").ConfigureAwait(false);
+                    if (sink.Placed != -1) throw new Exception("shortcut focus moved the target cursor");
+                    // Edge switching off: no portal frame, and a stray touch is ignored by the controller.
+                    router.SetRemoteActive(false); router.SetRemoteActive(true);
+                    router.Publish(Key(InputKind.KeyDown, 70));
+                    await Until(() => sink.IsDown(70), "input after a plain focus missing").ConfigureAwait(false);
+                    if (sink.Edge != ScreenEdge.None) throw new Exception("edge survived a focus without portal");
+                    sink.NextTouch = 999;
+                    router.Publish(InputEvent.MouseDelta(-40, 0, DateTime.UtcNow.Ticks));
+                    await Until(() => sink.NextTouch < 0, "touch was not taken").ConfigureAwait(false);
+                    await Task.Delay(100).ConfigureAwait(false);
+                    lock (reached) if (reached.Count != 1) throw new Exception("touch reported while edge switching was off");
+                }
+                controller.Disconnect("test complete"); target.Disconnect("test complete");
+                await MustEnd(listen, "edge listener cleanup").ConfigureAwait(false);
+            }
+        }
+
+        private sealed class PortalSink : IFailSafeInputSink, IEdgePortalSink
+        {
+            private readonly object _gate = new object();
+            private readonly HashSet<ushort> _down = new HashSet<ushort>();
+            public volatile ScreenEdge Edge;
+            public volatile ScreenEdge PlacedEdge;
+            public volatile int Placed = -1;
+            public volatile int NextTouch = -1;
+            public bool IsDown(ushort key) { lock (_gate) return _down.Contains(key); }
+            public bool Publish(InputEvent value) { lock (_gate) { if (value.Kind == InputKind.KeyDown) _down.Add(value.VirtualKey); else if (value.Kind == InputKind.KeyUp) _down.Remove(value.VirtualKey); return true; } }
+            public void ReleaseAll() { lock (_gate) _down.Clear(); }
+            public void SetPortalEdge(ScreenEdge edge) { Edge = edge; }
+            public bool PlaceAtEdge(ScreenEdge edge, int fraction) { PlacedEdge = edge; Placed = fraction; return true; }
+            public bool TryTakeEdgeTouch(out int fraction) { fraction = NextTouch; NextTouch = -1; return fraction >= 0; }
         }
 
         // Send and receive run on their own threads, so input keeps flowing while every pool worker is busy.

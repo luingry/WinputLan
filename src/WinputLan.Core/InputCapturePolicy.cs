@@ -68,6 +68,12 @@ namespace WinputLan.Core
             lock (_gate) return _remoteActive ? InputRoute.Remote : InputRoute.Local;
         }
 
+        // A local drag or selection must not be cut off by an edge switch.
+        public bool AnyLocalButtonDown
+        {
+            get { lock (_gate) { foreach (var id in _localDown) if (id >= 0x10000u) return true; return false; } }
+        }
+
         // Keys and mouse buttons share one id space: mouse buttons use ids above the 0..255 virtual-key range.
         public static uint KeyId(ushort virtualKey) { return virtualKey; }
         public static uint ButtonId(uint buttonMessage) { return 0x10000u | buttonMessage; }

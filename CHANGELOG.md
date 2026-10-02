@@ -5,6 +5,17 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.22] - 2026-10-02
+
+### Added
+
+- New preference "Trocar computador pelas extremidades da tela". When it is on, you choose one edge of each PC's primary monitor (left, right, top or bottom; right on this PC and left on the other by default). Touching this PC's edge switches control to the other PC, and its cursor appears at the matching spot of its own edge; touching the other PC's edge switches back the same way. Only primary monitors trigger switches and receive the cursor. A switch does not happen while a mouse button is held (drags and selections), while an app confines the cursor (games), or within 250 ms of the last switch. The settings of the controlling PC apply.
+- The keyboard shortcuts work as before and keep each PC's cursor where it was.
+
+### Compatibility
+
+- Edge switching adds two frames to the protocol. Update both PCs to 0.3.22 before turning it on: an older controlled PC closes the session when it receives them. With the option off, nothing changes on the wire.
+
 ## [0.3.21] - 2026-10-02
 
 ### Changed

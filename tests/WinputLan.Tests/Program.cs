@@ -25,6 +25,7 @@ namespace WinputLan.Tests
             Run("inbound queue merges waiting motion only", TestInboundQueue);
             Run("paced motion folds only the motion behind it", TestMotionPacingQueue);
             Run("tracked cursor obeys clip and monitor limits", TestCursorBounds);
+            Run("edge portal geometry and payloads", TestEdgePortal);
             Run("LAN IPv4 selection prefers routed Ethernet/Wi-Fi", TestLanAddressSelection);
             Run("rolling latency window is p50 and throttled", TestLatencyWindow);
             Run("input audit filters duplicates and throttles high frequency", TestInputAuditPolicy);
@@ -302,6 +303,49 @@ namespace WinputLan.Tests
                 var emitted = Enumerable.Range(0, 1000).Count(i => deltas.ShouldEmit(InputKind.MouseDelta, status, now.AddMilliseconds(i)));
                 Assert(emitted == 4, "relative motion is throttled on every audit path: " + status);
             }
+        }
+
+        private static void TestEdgePortal()
+        {
+            // Secondary monitor left of the primary, so the primary is not the first monitor nor at the virtual origin's corner.
+            var primary = new PixelRect(0, 0, 1920, 1080);
+            var monitors = new[] { new PixelRect(-2560, 0, 0, 1440), primary };
+            Assert(EdgePortal.Primary(monitors).Right == 1920, "the primary is the monitor at the origin");
+            Assert(EdgePortal.Primary(new[] { new PixelRect(100, 0, 200, 100) }).IsEmpty, "no monitor at the origin, no primary");
+            Assert(EdgePortal.Touches(ScreenEdge.Right, primary, 1919, 500) && !EdgePortal.Touches(ScreenEdge.Right, primary, 1918, 500), "right edge is the last column");
+            Assert(EdgePortal.Touches(ScreenEdge.Left, primary, -5, 500), "crossing into the monitor beyond the left edge touches it");
+            Assert(!EdgePortal.Touches(ScreenEdge.Left, primary, -5, 1200), "beyond the edge but outside its span does not touch it");
+            Assert(EdgePortal.Touches(ScreenEdge.Top, primary, 10, 0) && EdgePortal.Touches(ScreenEdge.Bottom, primary, 10, 1079) && !EdgePortal.Touches(ScreenEdge.Bottom, primary, 1920, 1079), "top and bottom edges");
+            Assert(!EdgePortal.Touches(ScreenEdge.None, primary, 1919, 500) && !EdgePortal.Touches(ScreenEdge.Right, default(PixelRect), 0, 0), "no edge or no primary never touches");
+            Assert(EdgePortal.FractionAt(ScreenEdge.Right, primary, 1919, 0) == 0 && EdgePortal.FractionAt(ScreenEdge.Right, primary, 1919, 1079) == EdgePortal.MaxFraction, "fraction spans the edge");
+            int x, y;
+            // Right edge of a 1080p primary at 40% height -> left edge of a 1440p primary at the same height share.
+            var target = new PixelRect(0, 0, 2560, 1440);
+            EdgePortal.PointAt(ScreenEdge.Left, target, EdgePortal.FractionAt(ScreenEdge.Right, primary, 1919, 432), EdgePortal.SpawnInset, out x, out y);
+            Assert(x == EdgePortal.SpawnInset && Math.Abs(y - 576) <= 1, "equivalent spot on the other edge, just inside it");
+            Assert(!EdgePortal.Touches(ScreenEdge.Left, target, x, y), "the arriving cursor does not touch its edge");
+            EdgePortal.PointAt(ScreenEdge.Bottom, target, EdgePortal.MaxFraction, EdgePortal.SpawnInset, out x, out y);
+            Assert(x == 2559 && y == 1437, "bottom edge end, inset upwards");
+            EdgePortal.PointAt(ScreenEdge.Right, primary, EdgePortal.FractionAt(ScreenEdge.Right, primary, 1919, 700), 0, out x, out y);
+            Assert(x == 1919 && y == 700, "fraction and point are inverse on the same edge");
+            Assert(EdgePortal.Next(ScreenEdge.Left) == ScreenEdge.Right && EdgePortal.Next(ScreenEdge.Bottom) == ScreenEdge.Left && EdgePortal.Next(ScreenEdge.None) == ScreenEdge.Left, "edge chip cycles");
+            var screen = new PixelRect(-2560, 0, 1920, 1440);
+            Assert(!EdgePortal.IsConfined(screen, screen) && EdgePortal.IsConfined(primary, screen) && !EdgePortal.IsConfined(default(PixelRect), screen), "only a clip smaller than the screen confines");
+            ScreenEdge edge; int? place; int fraction;
+            Assert(EdgePortal.TryDecodePortal(EdgePortal.EncodePortal(ScreenEdge.Top, 40000), out edge, out place) && edge == ScreenEdge.Top && place == 40000, "portal with placement round-trip");
+            Assert(EdgePortal.TryDecodePortal(EdgePortal.EncodePortal(ScreenEdge.Left, null), out edge, out place) && edge == ScreenEdge.Left && !place.HasValue, "portal without placement round-trip");
+            Assert(!EdgePortal.TryDecodePortal(new byte[] { 9, 0, 0, 0 }, out edge, out place) && !EdgePortal.TryDecodePortal(new byte[3], out edge, out place), "invalid portal payloads are rejected");
+            Assert(EdgePortal.TryDecodeReached(EdgePortal.EncodeReached(EdgePortal.MaxFraction), out fraction) && fraction == EdgePortal.MaxFraction && !EdgePortal.TryDecodeReached(new byte[1], out fraction), "reached round-trip");
+            var frame = FrameCodec.Decode(FrameCodec.Encode(FrameType.EdgeReached, 7, EdgePortal.EncodeReached(123)));
+            Assert(frame.Type == FrameType.EdgeReached, "edge frames pass the codec");
+            var routing = new InputRoutingState();
+            routing.Press(InputRoutingState.KeyId(0xA0));
+            Assert(!routing.AnyLocalButtonDown, "a held key does not block edge switching");
+            var left = InputRoutingState.ButtonId(0x0201);
+            routing.Press(left);
+            Assert(routing.AnyLocalButtonDown, "a held local button blocks edge switching");
+            routing.Release(left);
+            Assert(!routing.AnyLocalButtonDown, "released button unblocks it");
         }
 
         private static void TestInputRouting()
