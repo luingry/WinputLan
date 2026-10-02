@@ -5,6 +5,13 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.23] - 2026-10-02
+
+### Changed
+
+- "Trocar computador pelas extremidades da tela" is now decided only by the PC that controls. While a controller with the option on is connected, the controlled PC disables its own option (and treats it as off), with a note saying which PC defines the edges. It unlocks when the session ends or the controller turns the option off.
+- Every switch through an edge is recorded in the input log with the position along the edge, on both PCs. This helps confirm that the cursor arrives at the matching spot in both directions.
+
 ## [0.3.22] - 2026-10-02
 
 ### Added

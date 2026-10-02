@@ -39,6 +39,11 @@ namespace WinputLan.Runtime
         public event Action<InputKind, string> InputAudited;
         // Whether the controller currently directs its mouse and keyboard at this PC.
         public event Action<bool> FocusChanged;
+        // Whether the controller has edge switching on; it then owns the setting for this session.
+        public event Action<bool> ControllerEdgeSwitchingChanged;
+        // Edge switching events on this PC for the log: "placed" or "touched", with the fraction along the edge.
+        public event Action<string, int> EdgeActivity;
+        private bool _controllerEdgeSwitching;
 
         public void Dispose()
         {
@@ -96,9 +101,16 @@ namespace WinputLan.Runtime
             {
                 ScreenEdge edge;
                 int? place;
-                if (_portal == null || !_focused || _transport.State != PeerConnectionState.Connected || !EdgePortal.TryDecodePortal(frame.Payload, out edge, out place)) return;
+                if (_transport.State != PeerConnectionState.Connected || !EdgePortal.TryDecodePortal(frame.Payload, out edge, out place)) return;
+                // Also sent outside focus, when the session starts or the controller changes the setting.
+                SetControllerEdgeSwitching(EdgePortal.IsValid(edge));
+                if (_portal == null || !_focused) return;
                 _portal.SetPortalEdge(edge);
-                if (place.HasValue && EdgePortal.IsValid(edge)) _portal.PlaceAtEdge(edge, place.Value);
+                if (place.HasValue && EdgePortal.IsValid(edge))
+                {
+                    var placed = _portal.PlaceAtEdge(edge, place.Value);
+                    EdgeActivity?.Invoke(placed ? "placed" : "place-failed", place.Value);
+                }
                 return;
             }
             if (frame.Type == FrameType.ReleaseAll)
@@ -119,7 +131,14 @@ namespace WinputLan.Runtime
             var motion = input.Kind == InputKind.MouseDelta || input.Kind == InputKind.MouseMove;
             if (accepted && (!motion || unchecked(tick - _lastAckTick) >= AckIntervalMs)) { _lastAckTick = tick; ack = input.TimestampUtcTicks; }
             int fraction;
-            if (accepted && input.Kind == InputKind.MouseDelta && _portal != null && _portal.TryTakeEdgeTouch(out fraction)) edgeFraction = fraction;
+            if (accepted && input.Kind == InputKind.MouseDelta && _portal != null && _portal.TryTakeEdgeTouch(out fraction)) { edgeFraction = fraction; EdgeActivity?.Invoke("touched", fraction); }
+        }
+
+        private void SetControllerEdgeSwitching(bool on)
+        {
+            if (on == _controllerEdgeSwitching) return;
+            _controllerEdgeSwitching = on;
+            ControllerEdgeSwitchingChanged?.Invoke(on);
         }
 
         private async System.Threading.Tasks.Task SendFrameAsync(FrameType type, byte[] payload)
@@ -137,6 +156,7 @@ namespace WinputLan.Runtime
                 Interlocked.Increment(ref _epoch);
                 _queue.Clear();
                 _portal?.SetPortalEdge(ScreenEdge.None);
+                SetControllerEdgeSwitching(false);
                 if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
             }
         }

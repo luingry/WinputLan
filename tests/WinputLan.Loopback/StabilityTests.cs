@@ -45,6 +45,12 @@ namespace WinputLan.Loopback
                 {
                     var reached = new List<int>();
                     router.EdgeReached += fraction => { lock (reached) reached.Add(fraction); };
+                    var locks = new List<bool>();
+                    receiver.ControllerEdgeSwitchingChanged += on => { lock (locks) locks.Add(on); };
+                    // Announced at session start, before any focus: the target locks its setting but arms no edge.
+                    router.AnnounceEdgePortal(ScreenEdge.Left);
+                    await Until(() => { lock (locks) return locks.Count == 1 && locks[0]; }, "announcement did not lock the target setting").ConfigureAwait(false);
+                    if (sink.Edge != ScreenEdge.None) throw new Exception("an unfocused announcement set the target edge");
                     // Edge crossing on the controller: the target is told its edge and where to appear.
                     router.SetRemoteActive(true, EdgePortal.EncodePortal(ScreenEdge.Left, 30000));
                     await Until(() => sink.Placed == 30000, "target cursor was not placed at the edge spot").ConfigureAwait(false);
@@ -70,6 +76,13 @@ namespace WinputLan.Loopback
                     await Until(() => sink.NextTouch < 0, "touch was not taken").ConfigureAwait(false);
                     await Task.Delay(100).ConfigureAwait(false);
                     lock (reached) if (reached.Count != 1) throw new Exception("touch reported while edge switching was off");
+                    // Turning the option off unlocks the target; a session end does too.
+                    router.AnnounceEdgePortal(ScreenEdge.None);
+                    await Until(() => { lock (locks) return locks.Count == 2 && !locks[1]; }, "turning edge switching off did not unlock the target").ConfigureAwait(false);
+                    router.AnnounceEdgePortal(ScreenEdge.Top);
+                    await Until(() => { lock (locks) return locks.Count == 3 && locks[2]; }, "re-enabling did not lock the target").ConfigureAwait(false);
+                    target.Disconnect("unlock on session end");
+                    await Until(() => { lock (locks) return locks.Count == 4 && !locks[3]; }, "session end did not unlock the target").ConfigureAwait(false);
                 }
                 controller.Disconnect("test complete"); target.Disconnect("test complete");
                 await MustEnd(listen, "edge listener cleanup").ConfigureAwait(false);

@@ -1,5 +1,19 @@
 # Errors and prevention
 
+## 2026-10-02 - Harness de teste do hook travou o mouse do PC de desenvolvimento
+
+- Sintoma: um harness (console net48) que criava `LowLevelInputCapture` para testar `ReturnFromEdge` entrou em loop, tomou o mouse e o PC precisou ser reiniciado à força.
+- Causa raiz: `ApplyRemote(true)` chama `CursorVisibilityGuard.TryHide`, que chama `Arm`. O `Arm` relança `Process.GetCurrentProcess().MainModule` com `--cursor-guard` como processo auxiliar. No harness, esse executável é o próprio harness: cada cópia rodava o teste de novo (hooks globais + `SetCursorPos`) e relançava outra.
+- Solução: o harness foi removido. A lógica de borda é testada só no Core (geometria pura) e no loopback (sinks falsos).
+- Prevenção: nunca rodar no PC do usuário, sem autorização explícita, código que instale hooks globais, chame `SendInput`/`SetCursorPos` ou use `CursorVisibilityGuard`. Qualquer processo fora do `WinputLan.exe` que use essas classes vai relançar a si mesmo.
+
+## 2026-10-02 - Cursor não era posicionado no PC controlado (regressão evitada antes do release)
+
+- Sintoma: o loopback `edge switch frames` falhou com "target cursor was not placed at the edge spot".
+- Causa raiz: `EdgeActivity?.Invoke(_portal.PlaceAtEdge(...) ? ... : ..., ...)`. Com `?.`, os argumentos só são avaliados se houver assinante. Sem assinante, `PlaceAtEdge` não rodava.
+- Solução: chamar `PlaceAtEdge` antes e passar só o resultado ao evento.
+- Prevenção: nunca colocar efeito colateral dentro dos argumentos de `evento?.Invoke(...)`.
+
 ## 2026-10-02 - Envio e recebimento de input dependiam do thread pool (0.3.21)
 
 - Sintoma (risco de jitter): com o PC ocupado, o trecho entre o hook e o socket (controlador) e entre o socket e o injetor (controlado) rodava em threads do pool em prioridade normal, enquanto hook e injetor rodam em `Highest`. Com o pool saturado, um clique não chegava nem em 3 s.

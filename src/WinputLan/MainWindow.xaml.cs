@@ -60,6 +60,10 @@ namespace WinputLan
         private string _outboundNote;
         private bool _suppressStartupToggle;
         private bool _suppressEdgeToggle;
+        // The PC controlling this one has edge switching on; this PC's own setting is locked meanwhile.
+        private bool _edgeLockedByController;
+        // The current outbound session was told edge switching is on.
+        private bool _edgeAnnounced;
         // Set when the switch shortcut starts a connection, so input moves to the target once it is ready.
         private bool _switchToRemoteWhenReady;
         private Forms.NotifyIcon _trayIcon;
@@ -138,6 +142,8 @@ namespace WinputLan
                 _inputRouter.EdgeReached += fraction => Dispatcher.BeginInvoke(new Action(() => { if (_remoteActive && EdgeSwitchActive) SetInputTarget(false, fraction); }));
                 _listenerInputReceiver.InputAudited += AuditInput;
                 _listenerInputReceiver.FocusChanged += focused => Dispatcher.BeginInvoke(new Action(() => { _inboundFocused = focused; RenderMachines(); }));
+                _listenerInputReceiver.ControllerEdgeSwitchingChanged += on => Dispatcher.BeginInvoke(new Action(() => { _edgeLockedByController = on; RenderEdgeSettings(); AddLog("remote", "local", "Edge", on ? "locked-by-controller" : "unlocked"); }));
+                _listenerInputReceiver.EdgeActivity += (kind, fraction) => AddLog("remote", "local", "Edge", kind + " " + EdgePercent(fraction));
                 _listenerTransport.StateChanged += ListenerTransport_StateChanged;
                 _listenerPairingCoordinator.TrustLookup = LookupTrustedController;
                 _pairingCoordinator.TrustRejected += () => Dispatcher.BeginInvoke(new Action(OnTrustRejected));
@@ -694,10 +700,11 @@ namespace WinputLan
                 else _capture.ReturnFromEdge(edgeFraction.Value);
             }
             RenderMachines();
-            AddLog("local", remote ? "remote" : "local", "Target", (remote ? "selected" : "restored") + (edgeFraction.HasValue ? "-edge" : string.Empty));
+            AddLog("local", remote ? "remote" : "local", "Target", (remote ? "selected" : "restored") + (edgeFraction.HasValue ? "-edge " + EdgePercent(edgeFraction.Value) : string.Empty));
         }
 
-        private bool EdgeSwitchActive { get { return _config.EdgeSwitchEnabled && EdgePortal.IsValid(_config.LocalEdge) && EdgePortal.IsValid(_config.RemoteEdge); } }
+        // Off while the PC controlling this one has edge switching on: its settings decide the edges for both PCs.
+        private bool EdgeSwitchActive { get { return _config.EdgeSwitchEnabled && !_edgeLockedByController && EdgePortal.IsValid(_config.LocalEdge) && EdgePortal.IsValid(_config.RemoteEdge); } }
 
         private void EdgeSwitchCheckBox_Changed(object sender, RoutedEventArgs e)
         {
@@ -716,14 +723,31 @@ namespace WinputLan
             AddLog("local", "local", "Edge", EdgeSwitchActive ? "on" : "off");
         }
 
-        // The target learns its edge at the next switch; this PC's hook picks up its edge at once.
+        // This PC's hook picks up its edge at once; the target is told right away, so it can lock its own setting.
         private void RenderEdgeSettings()
         {
-            EdgeSwitchPanel.Visibility = _config.EdgeSwitchEnabled ? Visibility.Visible : Visibility.Collapsed;
+            var locked = _edgeLockedByController;
+            EdgeSwitchCheckBox.IsEnabled = !locked;
+            LocalEdgeButton.IsEnabled = !locked;
+            RemoteEdgeButton.IsEnabled = !locked;
+            EdgeSwitchPanel.Visibility = _config.EdgeSwitchEnabled && !locked ? Visibility.Visible : Visibility.Collapsed;
+            EdgeLockText.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
+            if (locked) EdgeLockText.Text = "Bloqueada: " + (string.IsNullOrWhiteSpace(_inboundControllerName) ? "o PC que controla este" : _inboundControllerName) + " já troca pelas extremidades e define as dos dois PCs.";
             LocalEdgeButton.Content = EdgeLabel(_config.LocalEdge);
             RemoteEdgeButton.Content = EdgeLabel(_config.RemoteEdge);
             if (_capture != null) _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
+            AnnounceEdgeSetting();
         }
+
+        // Sends None only after an edge was announced, so a session with the option off never sees the new frame.
+        private void AnnounceEdgeSetting()
+        {
+            if (_inputRouter == null || _transport.State != PeerConnectionState.Connected) { _edgeAnnounced = false; return; }
+            if (EdgeSwitchActive) { _inputRouter.AnnounceEdgePortal(_config.RemoteEdge); _edgeAnnounced = true; }
+            else if (_edgeAnnounced) { _inputRouter.AnnounceEdgePortal(ScreenEdge.None); _edgeAnnounced = false; }
+        }
+
+        private static string EdgePercent(int fraction) { return Math.Round(fraction * 100.0 / EdgePortal.MaxFraction) + "%"; }
 
         private static string EdgeLabel(ScreenEdge edge)
         {
@@ -744,6 +768,8 @@ namespace WinputLan
                 // A lost session must hand the pinned cursor and keyboard back to this machine immediately.
                 if (state != PeerConnectionState.Connected && _remoteActive) SetInputTarget(false);
                 if (state == PeerConnectionState.Offline || state == PeerConnectionState.Faulted) { _capture?.Dispose(); _capture = null; _switchToRemoteWhenReady = false; }
+                // A new session starts unannounced; with edge switching on the target is told now, before any switch.
+                if (state != PeerConnectionState.Connected) _edgeAnnounced = false; else AnnounceEdgeSetting();
                 RenderMachines();
                 AddLog("remote", "local", "Transport", state.ToString());
             });

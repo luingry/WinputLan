@@ -99,6 +99,28 @@ namespace WinputLan.Runtime
             if (!active) ReleaseAll();
         }
 
+        // Tells the target, focused or not, whether edge switching is on (its edge) or off (None), so it can lock
+        // its own setting. Ordered with focus frames by the focus gate.
+        public void AnnounceEdgePortal(ScreenEdge edge)
+        {
+            var token = _cts.Token;
+            _ = Task.Run(() =>
+            {
+                try
+                {
+                    _focusGate.Wait(token);
+                    try
+                    {
+                        if (_transport.State != PeerConnectionState.Connected) return;
+                        _transport.SendIfCurrent(FrameType.EdgePortal, EdgePortal.EncodePortal(edge, null), null, token);
+                    }
+                    finally { _focusGate.Release(); }
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                catch { }
+            });
+        }
+
         public void Dispose()
         {
             lock (_stateGate) { if (_disposed) return; _disposed = true; _remoteActive = false; _activationEpoch++; _queue.Clear(); }
