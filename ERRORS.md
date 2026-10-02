@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-10-02 - Na volta pela extremidade, o cursor retomava de onde tinha saído (0.3.22–0.3.23)
+
+- Sintoma: ao voltar do PC controlado pela extremidade, o cursor do PC controlador aparecia onde o controle tinha saído, não na posição equivalente. Os logs mostravam a fração certa nos dois PCs (`touched`/`restored-edge` iguais).
+- Causa raiz (dedução, sem reprodução ao vivo): o `SetCursorPos` da volta funcionava, mas o Windows já tinha calculado o próximo movimento do hook a partir da âncora (onde o cursor fica preso durante o controle remoto). Esse movimento chegava logo depois que a thread do hook ficava livre. Com a rota já local, ele passava e levava o cursor para âncora + movimento, perto de onde o controle tinha saído. Com o mouse em movimento, isso acontece quase sempre. Pelo atalho não aparecia porque âncora e ponto restaurado costumam coincidir.
+- Solução: `SwitchSettle` (Core) mais `TryHandleStaleMove`. Por 100 ms após uma troca, uma posição mais próxima da origem antiga do que da nova é considerada atrasada: localmente é descartada; para o PC controlado vira movimento a partir da origem antiga.
+- Prevenção: toda troca que move o cursor precisa considerar posições de hook calculadas antes dela. Os logs `Edge`/`Target` com fração separaram o problema de transporte do problema local.
+
 ## 2026-10-02 - Harness de teste do hook travou o mouse do PC de desenvolvimento
 
 - Sintoma: um harness (console net48) que criava `LowLevelInputCapture` para testar `ReturnFromEdge` entrou em loop, tomou o mouse e o PC precisou ser reiniciado à força.

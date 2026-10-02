@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.24] - 2026-10-02
+
+### Fixed
+
+- Returning through the other PC's edge now puts the cursor at the matching spot of this PC's edge. Before, it went back to where control had left: while the mouse was moving, a move Windows had already computed from the old cursor position reached the input hook right after the switch and undid the placement. The same fix removes a jump of about 50 px into the other PC when entering through an edge.
+
+### Changed
+
+- On the controlled PC, "Trocar computador pelas extremidades da tela" is now hidden, instead of shown disabled, while the controlling PC has it on.
+
 ## [0.3.23] - 2026-10-02
 
 ### Changed

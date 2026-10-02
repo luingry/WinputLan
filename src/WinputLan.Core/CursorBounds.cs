@@ -15,6 +15,22 @@ namespace WinputLan.Core
         public bool Contains(int x, int y) { return x >= Left && x < Right && y >= Top && y < Bottom; }
     }
 
+    // A switch moves the cursor (pinned to the anchor, or put back on this PC), but Windows may already have computed
+    // the next hook position from where the cursor was before. Letting that move through undoes the switch's cursor
+    // move: on an edge return the cursor jumped back to where control had left. Such a position is nearer the old
+    // origin than the new one; when both are the same point nothing needs telling apart.
+    public static class SwitchSettle
+    {
+        public const int WindowMs = 100;
+
+        public static bool IsFromOldOrigin(int x, int y, int oldX, int oldY, int newX, int newY)
+        {
+            return Distance2(x, y, oldX, oldY) < Distance2(x, y, newX, newY);
+        }
+
+        private static long Distance2(int x, int y, int ox, int oy) { return (long)(x - ox) * (x - ox) + (long)(y - oy) * (y - oy); }
+    }
+
     // Windows keeps the real cursor inside the ClipCursor rectangle and on a monitor. A tracked cursor that
     // ignores those limits drifts past them, and later motion back is spent unwinding the phantom offset.
     public static class CursorBounds

@@ -77,6 +77,10 @@ namespace WinputLan.Runtime
         private int _edgeSinceTick;
         private PixelRect _primary;
         private int _primaryTick;
+        // Right after a switch moved the cursor: where it was before, for hook positions computed from there.
+        private NativeMethods.POINT _settleOrigin;
+        private int _settleUntilTick;
+        private bool _settling;
         private const int PrimaryRefreshMs = 2000;
 
         // edgeReached runs on the hook thread with the fraction along this PC's edge; it must not block.
@@ -173,6 +177,7 @@ namespace WinputLan.Runtime
                 RaiseMouseHook();
                 // Pin the local cursor where it is: every hook position is then anchor + motion.
                 NativeMethods.GetCursorPos(out _restore);
+                BeginSettle(_restore);
                 // Leaving through the edge: a later return by shortcut lands just inside it, not on it.
                 if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, EdgePortal.FractionAt(edge, primary, _restore.X, _restore.Y), EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
                 _anchor = AnchorFor(_restore);
@@ -187,8 +192,35 @@ namespace WinputLan.Runtime
                 _cursorVisibility.Show();
                 // Back through the target's edge: appear at the matching spot of this PC's edge.
                 if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, edgeArgument - 1, EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
+                BeginSettle(_anchor);
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
             }
+        }
+
+        private void BeginSettle(NativeMethods.POINT origin)
+        {
+            _settleOrigin = origin;
+            _settleUntilTick = Environment.TickCount + SwitchSettle.WindowMs;
+            _settling = true;
+        }
+
+        // A move Windows computed from where the cursor was before the last switch. Locally it is dropped, since
+        // replaying it would undo the switch's cursor move; to the target it goes as motion from that old origin.
+        private bool TryHandleStaleMove(NativeMethods.POINT point, bool remote, long now)
+        {
+            if (!_settling) return false;
+            var current = remote ? _anchor : _restore;
+            if (unchecked(Environment.TickCount - _settleUntilTick) > 0 || !SwitchSettle.IsFromOldOrigin(point.X, point.Y, _settleOrigin.X, _settleOrigin.Y, current.X, current.Y))
+            {
+                // The first move computed from the new position ends the settling.
+                _settling = false;
+                return false;
+            }
+            if (!remote) return true;
+            var dx = point.X - _settleOrigin.X;
+            var dy = point.Y - _settleOrigin.Y;
+            if ((dx != 0 || dy != 0) && Math.Abs(dx) <= MaxDeltaPerEvent && Math.Abs(dy) <= MaxDeltaPerEvent) _sink.Publish(InputEvent.MouseDelta(dx, dy, now));
+            return true;
         }
 
         // Hook thread only (physical pixels). The primary monitor is cached; layout changes are picked up within seconds.
@@ -314,7 +346,9 @@ namespace WinputLan.Runtime
                     var now = DateTime.UtcNow.Ticks;
                     if (message == WmMouseMove)
                     {
-                        if (_routing.Continuous() != InputRoute.Remote) return TryLeaveThroughEdge(data.Point) ? (IntPtr)1 : NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+                        var remote = _routing.Continuous() == InputRoute.Remote;
+                        if (TryHandleStaleMove(data.Point, remote, now)) return (IntPtr)1;
+                        if (!remote) return TryLeaveThroughEdge(data.Point) ? (IntPtr)1 : NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
                         var dx = data.Point.X - _anchor.X;
                         var dy = data.Point.Y - _anchor.Y;
                         if ((dx == 0 && dy == 0) || Math.Abs(dx) > MaxDeltaPerEvent || Math.Abs(dy) > MaxDeltaPerEvent) return (IntPtr)1;

@@ -726,13 +726,10 @@ namespace WinputLan
         // This PC's hook picks up its edge at once; the target is told right away, so it can lock its own setting.
         private void RenderEdgeSettings()
         {
+            // While a controller with edge switching on is connected, the option is hidden here: that PC decides.
             var locked = _edgeLockedByController;
-            EdgeSwitchCheckBox.IsEnabled = !locked;
-            LocalEdgeButton.IsEnabled = !locked;
-            RemoteEdgeButton.IsEnabled = !locked;
+            EdgeSwitchCheckBox.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
             EdgeSwitchPanel.Visibility = _config.EdgeSwitchEnabled && !locked ? Visibility.Visible : Visibility.Collapsed;
-            EdgeLockText.Visibility = locked ? Visibility.Visible : Visibility.Collapsed;
-            if (locked) EdgeLockText.Text = "Bloqueada: " + (string.IsNullOrWhiteSpace(_inboundControllerName) ? "o PC que controla este" : _inboundControllerName) + " já troca pelas extremidades e define as dos dois PCs.";
             LocalEdgeButton.Content = EdgeLabel(_config.LocalEdge);
             RemoteEdgeButton.Content = EdgeLabel(_config.RemoteEdge);
             if (_capture != null) _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;

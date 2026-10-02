@@ -338,6 +338,11 @@ namespace WinputLan.Tests
             Assert(EdgePortal.TryDecodeReached(EdgePortal.EncodeReached(EdgePortal.MaxFraction), out fraction) && fraction == EdgePortal.MaxFraction && !EdgePortal.TryDecodeReached(new byte[1], out fraction), "reached round-trip");
             var frame = FrameCodec.Decode(FrameCodec.Encode(FrameType.EdgeReached, 7, EdgePortal.EncodeReached(123)));
             Assert(frame.Type == FrameType.EdgeReached, "edge frames pass the codec");
+            // Edge return: cursor pinned at anchor (2509, 432) is put back at (2557, 756). A move Windows computed from the
+            // anchor must not count as fresh, or it drags the cursor back to where control left.
+            Assert(SwitchSettle.IsFromOldOrigin(2504, 433, 2509, 432, 2557, 756), "a move computed from the anchor is stale");
+            Assert(!SwitchSettle.IsFromOldOrigin(2550, 757, 2509, 432, 2557, 756), "a move from the new position is fresh");
+            Assert(!SwitchSettle.IsFromOldOrigin(505, 500, 500, 500, 500, 500), "same old and new origin: every move is fresh");
             var routing = new InputRoutingState();
             routing.Press(InputRoutingState.KeyId(0xA0));
             Assert(!routing.AnyLocalButtonDown, "a held key does not block edge switching");
