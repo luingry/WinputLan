@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.26] - 2026-10-04
+
+### Changed
+
+- Faster start at Windows sign-in: the installer now precompiles Winput LAN to native code (NGen), so the app no longer compiles itself while every other startup program competes for the CPU. Uninstalling removes the native images. If precompiling is unavailable, the app runs exactly as before.
+
 ## [0.3.25] - 2026-10-02
 
 ### Fixed

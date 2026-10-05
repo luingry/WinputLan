@@ -42,6 +42,9 @@ Name: "{group}\Winput LAN"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 
 [Run]
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""Winput LAN (Private TCP)"" description=""Winput LAN secure peer input transport; Private profile only."" dir=in action=allow enable=yes profile=Private protocol=TCP localport=45900 program=""{app}\WinputLan.exe"""; Flags: runhidden waituntilterminated; StatusMsg: "Creating the explicit Private-profile firewall rule..."
+; Precompile to native code so a sign-in start does not JIT the app while every other startup program competes for the CPU.
+; Best effort: if ngen is missing or fails, the app still runs with normal JIT. Reinstalls/updates replace the image.
+Filename: "{code:NgenPath}"; Parameters: "install ""{app}\{#AppExeName}"" /nologo /silent"; Flags: runhidden waituntilterminated; StatusMsg: "Precompiling Winput LAN for a faster startup..."; Check: NgenAvailable
 Filename: "{app}\{#AppExeName}"; Description: "Abrir Winput LAN"; Flags: nowait postinstall skipifsilent runasoriginaluser
 ; OTA updates run silently; reopen the app for the signed-in user (not elevated) when they finish.
 Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser; Check: WizardSilent
@@ -51,3 +54,19 @@ Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=
 ; "Iniciar com o Windows" entries (per-user Run value and the elevated logon task).
 Filename: "{sys}\reg.exe"; Parameters: "delete HKCU\Software\Microsoft\Windows\CurrentVersion\Run /v WinputLan /f"; Flags: runhidden; RunOnceId: "RemoveWinputLanRunValue"
 Filename: "{sys}\schtasks.exe"; Parameters: "/Delete /TN ""Winput LAN"" /F"; Flags: runhidden; RunOnceId: "RemoveWinputLanStartupTask"
+Filename: "{code:NgenPath}"; Parameters: "uninstall ""{app}\{#AppExeName}"" /nologo /silent"; Flags: runhidden waituntilterminated; Check: NgenAvailable; RunOnceId: "RemoveWinputLanNativeImages"
+
+[Code]
+// The app is AnyCPU, so on a 64-bit OS it runs (and needs native images) as a 64-bit process.
+function NgenPath(Param: String): String;
+begin
+  if IsWin64 and FileExists(ExpandConstant('{win}\Microsoft.NET\Framework64\v4.0.30319\ngen.exe')) then
+    Result := ExpandConstant('{win}\Microsoft.NET\Framework64\v4.0.30319\ngen.exe')
+  else
+    Result := ExpandConstant('{win}\Microsoft.NET\Framework\v4.0.30319\ngen.exe');
+end;
+
+function NgenAvailable(): Boolean;
+begin
+  Result := FileExists(NgenPath(''));
+end;
