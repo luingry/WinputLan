@@ -17,7 +17,14 @@ namespace WinputLan.Loopback
 {
     internal static class Program
     {
-        private static void Main() { RunAsync().GetAwaiter().GetResult(); }
+        [STAThread]
+        private static void Main(string[] args)
+        {
+            if (args.Length > 0 && args[0] == "--instance-test") { SingleInstanceTests.RunChild(args); return; }
+            if (args.Length > 0 && args[0] == "--instance-ui-test") { SingleInstanceTests.Run(true); return; }
+            SingleInstanceTests.Run();
+            RunAsync().GetAwaiter().GetResult();
+        }
         private static async Task RunAsync()
         {
             var root = Path.Combine(Path.GetTempPath(), "WinputLan-loopback-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);

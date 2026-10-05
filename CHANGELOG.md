@@ -5,6 +5,13 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.27] - 2026-10-05
+
+### Fixed
+
+- Opening Winput LAN again now restores the existing window instead of starting another application instance that competes for the listener port, hotkeys and input hooks. Windows startup retries remain in the notification area. The cursor recovery helper remains independent.
+- Switching to administrator mode waits for the previous application process to exit before taking ownership. Normal and elevated launches share the same instance protection within the user's Windows session.
+
 ## [0.3.26] - 2026-10-04
 
 ### Changed

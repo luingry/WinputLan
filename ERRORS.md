@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-10-05 - Duas instâncias do aplicativo após abertura manual
+
+- Sintoma: a cópia instalada iniciada com `--startup` continuava executando quando uma abertura posterior com `--elevated-relaunch` criava outra instância. Cada uma criava seu próprio auxiliar `--cursor-guard`; a primeira ocupava a porta TCP 45900 e a segunda mantinha uma conexão de saída.
+- Causa raiz: a inicialização não tinha proteção de instância única. `IgnoreNew` da tarefa agendada só evita duplicar execuções da própria tarefa, não aberturas pelo executável.
+- Solução: mutex por usuário/sessão antes de configurações, elevação, hooks ou rede; evento de ativação restaura a janela existente em aberturas manuais. Objetos têm ACL do usuário e integridade média para funcionar entre processos normais/elevados. O relançamento elevado aguarda o processo anterior sair; o auxiliar do cursor continua fora dessa proteção.
+- Prevenção: testes em processos isolados cobrem aberturas simultâneas, ativação, recuperação após queda e transferência entre processos. `WinputLan.Loopback.exe --instance-ui-test` também verifica a restauração de janelas WPF ocultas/minimizadas no desktop interativo, fora dos requisitos de foco do CI. Nunca usar o teste para iniciar hooks ou interferir na sessão remota do usuário.
+
 ## 2026-10-02 - Modificadores do atalho presos no PC controlador após voltar (0.3.18–0.3.24)
 
 - Sintoma: às vezes, depois de trocar com o atalho (Ctrl+Shift+Alt+N), Ctrl/Shift/Alt ficavam pressionados e era preciso apertá-los de novo para soltar.

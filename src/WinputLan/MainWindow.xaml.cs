@@ -863,7 +863,7 @@ namespace WinputLan
         private void AutoAcceptKnownCheckBox_Changed(object sender, RoutedEventArgs e) { _config.AutoAcceptKnownConnections = AutoAcceptKnownCheckBox.IsChecked == true; try { _configStore.Save(_config); } catch { } }
         private void HideToTray() { CreateTrayIcon(); Hide(); _trayIcon.Visible = true; _trayIcon.ShowBalloonTip(1000, "Winput LAN", "Continua em execução na área de notificação.", Forms.ToolTipIcon.Info); }
         // The tray icon stays visible for the whole run; restoring keeps a maximized window maximized.
-        private void RestoreFromTray() { Show(); if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal; Activate(); }
+        private void RestoreFromTray() { WindowActivation.Restore(this); }
         private void ExitFromTray() { _backgroundLifecycle.RequestExplicitExit(); if (_trayIcon != null) _trayIcon.Visible = false; Close(); }
 
         private void AddLog(string origin, string destination, string type, string status)

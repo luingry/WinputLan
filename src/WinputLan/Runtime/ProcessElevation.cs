@@ -25,7 +25,9 @@ namespace WinputLan.Runtime
         {
             try
             {
-                Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, ElevationPolicy.RelaunchedArgument + (startup ? " " + StartupRegistration.StartupArgument : string.Empty)) { UseShellExecute = true, Verb = "runas" });
+                var arguments = ElevationPolicy.RelaunchedArgument + " " + SingleInstanceGate.HandoverArgument + " " + Process.GetCurrentProcess().Id
+                    + (startup ? " " + StartupRegistration.StartupArgument : string.Empty);
+                Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, arguments) { UseShellExecute = true, Verb = "runas" });
                 return true;
             }
             catch (Win32Exception ex) when (ex.NativeErrorCode == ErrorCancelled) { return false; }
