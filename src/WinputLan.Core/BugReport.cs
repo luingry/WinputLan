@@ -73,6 +73,10 @@ namespace WinputLan.Core
         private static DataContractJsonSerializer Serializer(Type type) => new DataContractJsonSerializer(type,
             new DataContractJsonSerializerSettings { UseSimpleDictionaryFormat = true, MaxItemsInObjectGraph = 20000 });
         public static string Preview(BugReport report) => Encoding.UTF8.GetString(Serialize(report.Diagnostics));
+        public static BugReport NewFromSnapshot(BugReport snapshot) => new BugReport {
+            CapturedUtc = snapshot.CapturedUtc,
+            Diagnostics = Deserialize<BugReportDiagnosticsData>(Serialize(snapshot.Diagnostics))
+        };
         public static string Validate(BugReport report)
         {
             if (report == null || report.Schema != 1 || !Regex.IsMatch(report.Id ?? "", "^[a-f0-9]{32}$")) return "Relato inválido.";

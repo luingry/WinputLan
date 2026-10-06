@@ -30,12 +30,13 @@ namespace WinputLan
         private readonly DispatcherTimer _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
         private WebView2 _web;
         private string _token;
-        private bool _busy, _ready, _closed, _sent, _preparing;
+        private bool _busy, _ready, _closed, _sent, _preparing, _restored;
         public BugReportWindow(BugReport snapshot, string draftDirectory = null)
         {
             InitializeComponent(); _snapshot = snapshot;
             _store = new BugReportDraftStore(draftDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan", "reports"));
-            _draft = _store.Load() ?? BugReportDraft.Create(snapshot);
+            _draft = _store.Load(); _restored = _draft != null;
+            if(_draft == null) _draft = BugReportDraft.Create(snapshot);
             _saveTimer.Tick += (s,e) => { _saveTimer.Stop(); SaveDraft(); };
             Populate();
         }
@@ -50,8 +51,10 @@ namespace WinputLan
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             TitleBox.Focus();
-            if (!_draft.Frozen) { var network = await Task.Run(() => BugReportDiagnostics.GetNetworkType()); if (_closed) return; if (!_draft.Frozen) _draft.Report.Diagnostics.Metadata["networkType"] = network; Populate(); }
-            StatusText.Text = _draft.Frozen ? "Rascunho de uma tentativa anterior recuperado. Reenvie para confirmar o resultado." : "Descreva o problema. O diagnóstico foi capturado ao abrir esta janela.";
+            var network = await Task.Run(() => BugReportDiagnostics.GetNetworkType()); if (_closed) return;
+            if(!ReferenceEquals(_snapshot,_draft.Report) || !_draft.Frozen) _snapshot.Diagnostics.Metadata["networkType"] = network;
+            if(!_restored && !_draft.Frozen) { _draft.Report.Diagnostics.Metadata["networkType"] = network; Populate(); }
+            StatusText.Text = _draft.Frozen ? "Rascunho de uma tentativa anterior recuperado. Reenvie para confirmar o resultado." : _restored ? "Rascunho recuperado. O diagnóstico original foi preservado." : "Descreva o problema. O diagnóstico foi capturado ao abrir esta janela.";
             await PrepareChallengeAsync();
         }
         private async Task PrepareChallengeAsync()
@@ -105,13 +108,17 @@ namespace WinputLan
         private bool SaveDraft()
         {
             if(_sent) return true;
-            try { _store.Save(_draft); return true; } catch { StatusText.Text = "Não foi possível salvar o rascunho neste PC. Tente novamente antes de enviar."; return false; }
+            try { _store.Save(_draft); return true; }
+            catch(InvalidOperationException ex) { StatusText.Text = ex.Message + " Reduza a descrição ou os passos para salvar o rascunho."; return false; }
+            catch { StatusText.Text = "Não foi possível salvar o rascunho neste PC. Tente novamente antes de enviar."; return false; }
         }
         // A frozen retry may confirm an existing durable receipt even while CAPTCHA is unavailable.
         private void UpdateSend() { if(SendButton != null) SendButton.IsEnabled = _ready && !_busy && !_sent && (_token != null || _draft.Frozen) && BugReportJson.Validate(_draft.Report) == null; }
         private async void Send_Click(object sender, RoutedEventArgs e)
         {
             if (_busy || (_token == null && !_draft.Frozen) || BugReportJson.Validate(_draft.Report) != null) return;
+            try { BugReportJson.Serialize(new BugReportSubmission { Report = _draft.Report, Secret = _draft.Secret, Token = _token ?? "" }); }
+            catch(InvalidOperationException ex) { StatusText.Text = ex.Message + " Reduza a descrição ou os passos antes de enviar."; return; }
             _draft.Frozen = true; if(!SaveDraft()) { _draft.Frozen = false; return; }
             Populate(); _busy = true; NewButton.IsEnabled = VerifyButton.IsEnabled = false; SendButton.Content = "Enviando…"; UpdateSend();
             StatusText.Text = "Enviando relato com diagnóstico técnico…";
@@ -132,8 +139,8 @@ namespace WinputLan
             if(_busy) return;
             if(!_sent && (!string.IsNullOrEmpty(_draft.Report.Title) || !string.IsNullOrEmpty(_draft.Report.Description)) && MessageBox.Show(this,"Descartar o rascunho e iniciar um novo relato? Uma tentativa anterior pode já ter sido recebida.","Novo relato",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;
             try { _store.Clear(); } catch { StatusText.Text = "Não foi possível remover o rascunho. Confira a permissão de gravação deste PC."; return; }
-            var fresh = BugReportJson.Deserialize<BugReport>(BugReportJson.Serialize(_snapshot)); fresh.Id = Guid.NewGuid().ToString("N");fresh.Title = fresh.Description = fresh.Steps = "";
-            _draft = BugReportDraft.Create(fresh); _sent = false; Populate(); ChallengeHost.Visibility = VerifyButton.Visibility = Visibility.Visible;
+            var fresh = BugReportJson.NewFromSnapshot(_snapshot);
+            _draft = BugReportDraft.Create(fresh); _sent = false; _restored = false; Populate(); ChallengeHost.Visibility = VerifyButton.Visibility = Visibility.Visible;
             SendButton.Content = "Enviar relato"; StatusText.Text = "Novo relato. O diagnóstico continua sendo o snapshot da abertura."; await PrepareChallengeAsync();
         }
         private void Close_Click(object sender, RoutedEventArgs e) { Close(); }

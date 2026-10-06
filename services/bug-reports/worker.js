@@ -26,6 +26,12 @@ export function validateReport(r) {
 }
 function canonical(value) { if(Array.isArray(value))return '['+value.map(canonical).join(',')+']'; if(value&&typeof value==='object')return '{'+Object.keys(value).sort().map(k=>JSON.stringify(k)+':'+canonical(value[k])).join(',')+'}'; return JSON.stringify(value); }
 async function hash(text) { return [...new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text)))].map(x=>x.toString(16).padStart(2,'0')).join(''); }
+function sameHash(a,b) {
+ const left=new TextEncoder().encode(a),right=new TextEncoder().encode(b);
+ if(typeof crypto.subtle.timingSafeEqual==='function')return crypto.subtle.timingSafeEqual(left,right);
+ // Node test runners lack the Workers extension; fixed-length hashes still compare without early exit.
+ let different=left.length^right.length;for(let i=0;i<64;i++)different|=(left[i]||0)^(right[i]||0);return different===0;
+}
 async function ipKey(ip,secret,day) { const k=await crypto.subtle.importKey('raw',new TextEncoder().encode(secret),{name:'HMAC',hash:'SHA-256'},false,['sign']); return [...new Uint8Array(await crypto.subtle.sign('HMAC',k,new TextEncoder().encode(day+':'+ip)))].map(x=>x.toString(16).padStart(2,'0')).join(''); }
 export async function readBody(request,limit=MAX_BODY,timeoutMs=10000) {
  if(request.headers.has('content-encoding')||!/^application\/json(?:;|$)/i.test(request.headers.get('content-type')||'')) throw new RequestError(415,'Formato não permitido.');
@@ -42,7 +48,7 @@ function json(body,status=200){return new Response(JSON.stringify(body),{status,
 async function budget(db,key,limit,expires) { const row=await db.prepare('INSERT INTO budgets(key,count,expires) VALUES(?,1,?) ON CONFLICT(key) DO UPDATE SET count=count+1 WHERE count < ? RETURNING count').bind(key,expires,limit).first();return !!row; }
 async function stored(db,id,secretHash,contentHash) {
  const row=await db.prepare('SELECT secret_hash,content_hash FROM reports WHERE id=?').bind(id).first();
- if(!row)return null; if(row.secret_hash!==secretHash||row.content_hash!==contentHash)throw new RequestError(409,'Este relato já foi enviado com outro conteúdo.');return json({receipt:'WLR-'+id,accepted:true});
+ if(!row)return null; if(!sameHash(row.secret_hash,secretHash)||row.content_hash!==contentHash)throw new RequestError(409,'Este relato já foi enviado com outro conteúdo.');return json({receipt:'WLR-'+id,accepted:true});
 }
 export async function acceptReport(request,env,fetchImpl=fetch,now=Date.now()) {
  const body=await readBody(request); keys(body,['report','secret','token']); validateReport(body.report);

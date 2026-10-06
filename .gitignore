@@ -11,3 +11,4 @@ artifacts/
 **/node_modules/
 **/.wrangler/
 **/.dev.vars
+services/bug-reports/wrangler.production.jsonc

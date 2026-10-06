@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-10-06 - Relato Unicode grande impedia o reinício do formulário
+
+- Cenário reproduzido em teste: campos dentro dos limites de caracteres, com 500 eventos e texto Unicode, excediam 96 KiB em UTF-8. O clone de "Novo relato" serializava também esse texto antes de limpá-lo; uma exceção de tamanho poderia escapar do handler.
+- Causa: o snapshot inicial compartilhava o objeto editado, e o conteúdo era congelado antes de validar o tamanho completo da submissão.
+- Solução: validar os bytes antes de congelar e mostrar instrução para reduzir o texto; iniciar um novo relato copiando somente o diagnóstico. Rascunhos recuperados conservam o diagnóstico original; o snapshot da abertura coleta o tipo de rede para novos relatos.
+- Prevenção: regressão com Unicode + 500 eventos exige zero chamadas HTTP para corpo grande e verifica um novo relato com diagnóstico independente, sem copiar o texto excessivo.
+
 ## 2026-10-06 - WebView2 não abria no aplicativo AnyCPU
 
 - Sintoma: o formulário abria, mas a verificação não carregava; o teste isolado de runtime retornou `BadImageFormatException` / `8007000B` em processo x64, apesar do Runtime instalado.
@@ -11,7 +18,7 @@
 
 - Sintoma: migration válida no SQLite/Miniflare retornou `7500: incomplete input` no endpoint remoto de query.
 - Causa: o parser de statements remoto não trata de forma confiável CRLF e `CASE ... END` interno em triggers. O parser de teste também deve manter a definição inteira do trigger, sem dividir no `END` de um CASE.
-- Correção local: condição da quota em `WHEN`, corpo simples com `RAISE`, SQL normalizado para LF no envio remoto; testes preservam statements completos. A verificação no D1 remoto permanece pendente porque o plugin Cloudflare ficou indisponível durante a configuração.
+- Solução: condição da quota em `WHEN`, corpo simples com `RAISE`, SQL normalizado para LF no envio remoto; testes preservam statements completos. Migração executada no D1 remoto e definições de `report_quota`/`report_outbox` conferidas em `sqlite_master`.
 - Prevenção: executar a migração no D1 remoto e conferir os triggers em `sqlite_master` antes de publicar. Referências: cloudflare/workers-sdk issues 14991 e 4727.
 
 ## 2026-10-06 - Verificação web cobria o resultado do relato

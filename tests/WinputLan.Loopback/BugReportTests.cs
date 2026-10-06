@@ -36,7 +36,18 @@ namespace WinputLan.Loopback
                 using(var client=new BugReportClient(new OversizedHttp())) {
                     try {client.SendAsync(draft,"token",CancellationToken.None).GetAwaiter().GetResult();throw new Exception("Oversized response accepted.");}catch(InvalidOperationException){ }
                 }
-                store.Clear();Console.WriteLine("REPORT PASS: allowlist privacy, DPAPI draft, frozen recovery, identical retry and bounded response");
+                var large = new BugReport { Title = "Teste de tamanho", Description = new string('\u4e00',6000), Steps = new string('\u4e00',4000) };
+                large.Diagnostics.Events = Enumerable.Range(0,500).Select(_ => new BugReportEvent { Time=large.CapturedUtc, Origin="remote", Destination="remote", Type="Input.ReleaseAll", Status="code-renewed-trust-cleared" }).ToList();
+                if(BugReportJson.Validate(large)!=null)throw new Exception("UTF-8 fixture is outside the character limits.");
+                try { BugReportJson.Serialize(large);throw new Exception("Oversized restart fixture is too small."); }catch(InvalidOperationException){ }
+                var untouched = new FakeHttp(large.Id);
+                using(var client=new BugReportClient(untouched)) {
+                    try { client.SendAsync(BugReportDraft.Create(large),"token",CancellationToken.None).GetAwaiter().GetResult();throw new Exception("UTF-8 body limit was bypassed."); }catch(InvalidOperationException){ }
+                }
+                if(untouched.Bodies.Count!=0)throw new Exception("Oversized UTF-8 report reached HTTP.");
+                var fresh = BugReportJson.NewFromSnapshot(large);
+                if(fresh.Id==large.Id || fresh.Title!="" || fresh.Description!="" || fresh.Steps!="" || fresh.Diagnostics.Events.Count!=500 || ReferenceEquals(fresh.Diagnostics,large.Diagnostics))throw new Exception("Oversized draft could not restart with isolated diagnostics.");
+                store.Clear();Console.WriteLine("REPORT PASS: allowlist privacy, DPAPI draft, frozen recovery, identical retry, UTF-8 limits, oversized restart and bounded response");
             } finally {if(Directory.Exists(root))Directory.Delete(root,true);}
         }
         public static void Runtime()

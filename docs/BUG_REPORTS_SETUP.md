@@ -11,35 +11,37 @@ O menu **Reportar problema** no dashboard e na bandeja abre uma janela WPF. A de
 | Email Routing `winputlan-feedback@luingry.com.br` | Regra criada para a caixa já verificada do proprietário |
 | D1 `winputlan-bug-reports` | Criado; ID `bd3b96bb-3505-4217-9ca9-aa6ca0d730a5` |
 | Widget Turnstile `Winput LAN reports` | Criado; domínio `bugs.luingry.com.br`, chave pública em `wrangler.jsonc` |
-| Migration D1 remota | Pendente de nova execução e conferência dos triggers |
-| Worker, secrets, domínio e cron | Pendentes de publicação |
-| Recebimento real do e-mail com anexo | Pendente de teste ponta a ponta |
+| Migration D1 remota | Executada; triggers de quota e outbox conferidos |
+| Worker, secrets, domínio e cron | Publicados; HTTPS `/health` responde `ready:true`; cron a cada cinco minutos |
+| Recebimento real do e-mail com anexo | Confirmado na caixa principal; anexo JSON aberto e conferido |
+| Envio completo pela janela nativa | Confirmado: Turnstile automático, protocolo recebido, rascunho removido e e-mail com diagnóstico real recebido |
 
-O plugin Cloudflare deixou de estar disponível durante o provisionamento. Wrangler também não tem sessão autenticada neste computador. A versão pública 0.3.27 permanece ativa até a conclusão do serviço; este código prepara a 0.3.28.
+O primeiro teste de e-mail utilizou um relato sintético inserido administrativamente no D1. Em seguida, o envio pela janela nativa recebeu `WLR-dbb1135f37b94ed5bd2dcddb12c7baa0`; o e-mail chegou à caixa principal com o JSON de diagnóstico da versão 0.3.28. O resolvedor do roteador apresentou NXDOMAIN transitório durante a implantação; a resolução normal depois se recuperou, permitindo validar o fluxo sem alterar a configuração de rede do computador.
 
-## Concluir a configuração
+## Configuração ativa e manutenção
 
-A opção preferida é reconectar o plugin Cloudflare nesta conversa. Isso permite concluir a migração, publicação e verificação sem copiar tokens para o repositório.
+O serviço foi provisionado pelo plugin Cloudflare. Secrets permanecem no Worker; não há credenciais de Cloudflare ou e-mail dentro do aplicativo.
 
-O endereço de feedback também foi cadastrado como destination address para permitir envio gratuito diretamente ao alias. **Se chegar a mensagem de verificação da Cloudflare nessa caixa, confirme o endereço pelo link oficial.** O encaminhamento existente entrega a mensagem na caixa do proprietário. Criar uma regra de encaminhamento e verificar um destination address são operações diferentes. Não foi possível confirmar essa verificação nesta entrega.
+As notificações usam `winputlan-feedback@luingry.com.br` como remetente e a caixa do proprietário já verificada como destino interno. Esse destino é o mesmo usado pelo Email Routing do alias. Não é necessário verificar o alias para o envio ativo. O alias também foi cadastrado como destination address e permanece pendente; sua confirmação é opcional, caso futuramente se queira enviar diretamente ao alias em vez da caixa principal.
 
-Alternativa com Wrangler, usando Node.js 22 ou mais recente, na pasta `services/bug-reports`:
+Para manutenção com Wrangler, usar Node.js 22 ou mais recente na pasta `services/bug-reports`. A configuração local `wrangler.production.jsonc` é privada e ignorada pelo Git: contém somente a restrição do binding ao destinatário verificado. Em um checkout novo, copiar `wrangler.jsonc` para esse arquivo e ajustar `send_email[0].destination_address` para a caixa verificada do proprietário. O arquivo público usa o alias como exemplo; não publicar endereços pessoais no Git.
 
 ```powershell
 npm ci
 npx wrangler login
-npx wrangler d1 migrations apply winputlan-bug-reports --remote
-npx wrangler d1 execute winputlan-bug-reports --remote --command "SELECT name,sql FROM sqlite_master WHERE type='trigger'"
-npx wrangler secret put TURNSTILE_SECRET
-npx wrangler secret put IP_HASH_SECRET
-npx wrangler deploy
+npx wrangler d1 migrations apply winputlan-bug-reports --remote --config wrangler.production.jsonc
+npx wrangler d1 execute winputlan-bug-reports --remote --config wrangler.production.jsonc --command "SELECT name,sql FROM sqlite_master WHERE type='trigger'"
+npx wrangler secret put TURNSTILE_SECRET --config wrangler.production.jsonc
+npx wrangler secret put IP_HASH_SECRET --config wrangler.production.jsonc
+npx wrangler secret put EMAIL_TO --config wrangler.production.jsonc
+npx wrangler deploy --config wrangler.production.jsonc
 ```
 
-`TURNSTILE_SECRET` é o secret do widget já criado, disponível no painel Turnstile. `IP_HASH_SECRET` deve ser um valor criptograficamente aleatório com pelo menos 32 bytes, gerado e guardado como secret do Worker. Nunca colocar essas chaves no app, Git ou logs. O sitekey público e os IDs D1 não são credenciais.
+Os três secrets já estão configurados. `TURNSTILE_SECRET` é o secret do widget existente. `IP_HASH_SECRET` usa 32 bytes criptograficamente aleatórios. `EMAIL_TO` guarda o destinatário privado e deve coincidir com a restrição do binding. Não repetir os comandos `secret put` em uma manutenção comum: eles servem para instalação nova ou rotação deliberada. Nunca colocar chaves ou endereço pessoal no app, Git ou logs. O sitekey público e os IDs D1 não são credenciais.
 
 A migração usa LF e statements completos de trigger para evitar o erro `7500: incomplete input` observado na API remota. É idempotente para permitir completar uma execução parcial. Conferir a existência de `report_quota` e `report_outbox` no D1 remoto antes de publicar.
 
-O deploy configura `bugs.luingry.com.br` como Custom Domain, Workers.dev e previews desativados, bindings DB/EMAIL/ABUSE_RATE e cron a cada cinco minutos. Não alterar o tunnel QGen, MX ou regras de e-mail de outros endereços. O binding de e-mail só permite o destinatário de feedback. Se optar por usar diretamente a caixa já verificada do proprietário, configurar o destinatário e a restrição do binding em uma configuração privada, sem publicar o endereço pessoal.
+O deploy configura `bugs.luingry.com.br` como Custom Domain, Workers.dev e previews desativados, bindings DB/EMAIL/ABUSE_RATE e cron a cada cinco minutos. A conta precisou registrar o namespace Workers `luingry-winputlan`; o script permanece desativado nesse subdomínio. O binding de e-mail permite somente a caixa verificada e o remetente de feedback. Preservar o tunnel QGen, MX e regras de outros endereços.
 
 Depois do deploy, `https://bugs.luingry.com.br/health` deve responder `{"ready":true}`. Essa resposta verifica presença dos bindings/secrets, mas não prova envio de e-mail. Abrir o formulário, concluir a verificação e enviar um relato de teste. Conferir o protocolo no D1 e o e-mail com `winputlan-diagnostic.json`; só então publicar a versão do aplicativo.
 
