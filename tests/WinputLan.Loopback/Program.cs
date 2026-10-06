@@ -20,8 +20,11 @@ namespace WinputLan.Loopback
         [STAThread]
         private static void Main(string[] args)
         {
+            if (args.Contains("--report-runtime-test")) { BugReportTests.Runtime(); return; }
+            if (args.Contains("--report-test")) { BugReportTests.Run(); return; }
             if (args.Length > 0 && args[0] == "--instance-test") { SingleInstanceTests.RunChild(args); return; }
             if (args.Length > 0 && args[0] == "--instance-ui-test") { SingleInstanceTests.Run(true); return; }
+            BugReportTests.Run();
             SingleInstanceTests.Run();
             RunAsync().GetAwaiter().GetResult();
         }

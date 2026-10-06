@@ -5,6 +5,14 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.28] - 2026-10-06
+
+### Added
+
+- In-app problem report window, available from the dashboard and tray menu.
+- Automatic filtered diagnostics, encrypted local draft and recovery of uncertain send attempts.
+- Cloudflare report service with Turnstile, atomic acceptance quotas, duplicate protection and durable email notifications.
+
 ## [0.3.27] - 2026-10-05
 
 ### Fixed

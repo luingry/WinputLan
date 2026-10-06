@@ -33,6 +33,9 @@ Name: "brazilianportuguese"; MessagesFile: "compiler:Languages\BrazilianPortugue
 Source: "..\src\WinputLan\bin\Release\net48\WinputLan.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\WinputLan\bin\Release\net48\WinputLan.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\src\WinputLan\bin\Release\net48\WinputLan.exe.config"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\WinputLan\bin\Release\net48\Microsoft.Web.WebView2.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\WinputLan\bin\Release\net48\Microsoft.Web.WebView2.Wpf.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\src\WinputLan\bin\Release\net48\runtimes\*"; DestDir: "{app}\runtimes"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\assets\brand\winput-lan.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\assets\brand\icon-normalized.png"; DestDir: "{app}\assets\brand"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion

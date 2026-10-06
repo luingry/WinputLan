@@ -8,3 +8,6 @@ artifacts/
 *.download
 *.tmp
 .vs/
+**/node_modules/
+**/.wrangler/
+**/.dev.vars

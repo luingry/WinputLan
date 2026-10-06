@@ -16,6 +16,14 @@ namespace WinputLan
 
         protected override void OnStartup(StartupEventArgs e)
         {
+            // Isolated report UI QA never creates input hooks, a listener, or pairing state.
+            if(e.Args.Contains("--report-smoke"))
+            {
+                base.OnStartup(e);
+                var snapshot = BugReportDiagnostics.Capture(WinputConfig.CreateDefault(), new TransactionLogEntry[0], new double[4], false, false, false, "Offline", "Offline", 1, 1);
+                var report = new BugReportWindow(snapshot, Path.Combine(Path.GetTempPath(), "WinputLan-report-smoke"));
+                MainWindow = report; report.Show(); return;
+            }
             if (e.Args.Length > 0 && string.Equals(e.Args[0], CursorVisibilityGuard.HelperArgument, StringComparison.Ordinal))
             {
                 CursorVisibilityGuard.RunHelper(e.Args);

@@ -43,6 +43,12 @@ namespace WinputLan.Tests
             Run("elevated relaunch policy", TestElevationPolicy);
             Run("machine list follows where input goes", TestMachineList);
             Run("trusted peers match identity and certificate", TestTrustedPeers);
+            Run("report latency snapshot preserves samples and publication", () => {
+                var window = new InputLatencyWindow(); window.Record(TimeSpan.FromMilliseconds(12)); window.Record(TimeSpan.FromMilliseconds(28));
+                var snapshot = window.Snapshot(); snapshot[0] = 999;
+                Assert(window.Snapshot()[0] == 2 && window.Snapshot()[3] == 28, "snapshot must be independent");
+                double value; Assert(window.TryGetP50(DateTime.UtcNow,TimeSpan.FromHours(1),out value) && value == 28, "snapshot must not consume publication interval");
+            });
             Console.WriteLine("PASS={0} FAIL={1}", _passed, _failed);
             if (_failed != 0) Environment.ExitCode = 1;
         }
