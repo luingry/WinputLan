@@ -72,6 +72,20 @@ namespace WinputLan
         private readonly InputAuditPolicy _inputAuditPolicy = new InputAuditPolicy();
         private DispatcherTimer _accessCodeTimer;
         private CancellationTokenSource _outboundRequestCts;
+        private BugReportWindow _reportWindow;
+
+        private void ReportBug_Click(object sender, RoutedEventArgs e) { OpenBugReport(); }
+        private void OpenBugReport()
+        {
+            if (_reportWindow != null) { WindowActivation.Restore(_reportWindow); return; }
+            var transform = PresentationSource.FromVisual(this)?.CompositionTarget?.TransformToDevice ?? Matrix.Identity;
+            var snapshot = BugReportDiagnostics.Capture(_config, _transactionLog.Snapshot(), _latencyWindow.Snapshot(), _isElevated, _remoteActive, _inboundFocused,
+                _transport.State.ToString(), (_listenerTransport?.State ?? PeerConnectionState.Offline).ToString(), transform.M11, transform.M22);
+            try { _reportWindow = new BugReportWindow(snapshot) { Owner = this }; }
+            catch { MessageBox.Show(this, "Não foi possível preparar o rascunho. Confira a permissão de gravação deste PC.", "Reportar problema", MessageBoxButton.OK, MessageBoxImage.Warning); return; }
+            _reportWindow.Closed += (s,e) => _reportWindow = null;
+            _reportWindow.Show();
+        }
 
         public MainWindow(WinputConfig config, AppConfigStore configStore)
         {
@@ -853,6 +867,7 @@ namespace WinputLan
             _trayIcon = new Forms.NotifyIcon { Text = "Winput LAN", Icon = LoadTrayIcon(), Visible = false };
             var menu = new Forms.ContextMenuStrip();
             menu.Items.Add("Restaurar", null, (s, e) => Dispatcher.BeginInvoke(new Action(RestoreFromTray)));
+            menu.Items.Add("Reportar problema", null, (s, e) => Dispatcher.BeginInvoke(new Action(OpenBugReport)));
             menu.Items.Add("Sair", null, (s, e) => Dispatcher.BeginInvoke(new Action(ExitFromTray)));
             _trayIcon.ContextMenuStrip = menu;
             _trayIcon.DoubleClick += (s, e) => Dispatcher.BeginInvoke(new Action(RestoreFromTray));

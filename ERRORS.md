@@ -1,5 +1,33 @@
 # Errors and prevention
 
+## 2026-10-06 - Relato Unicode grande impedia o reinício do formulário
+
+- Cenário reproduzido em teste: campos dentro dos limites de caracteres, com 500 eventos e texto Unicode, excediam 96 KiB em UTF-8. O clone de "Novo relato" serializava também esse texto antes de limpá-lo; uma exceção de tamanho poderia escapar do handler.
+- Causa: o snapshot inicial compartilhava o objeto editado, e o conteúdo era congelado antes de validar o tamanho completo da submissão.
+- Solução: validar os bytes antes de congelar e mostrar instrução para reduzir o texto; iniciar um novo relato copiando somente o diagnóstico. Rascunhos recuperados conservam o diagnóstico original; o snapshot da abertura coleta o tipo de rede para novos relatos.
+- Prevenção: regressão com Unicode + 500 eventos exige zero chamadas HTTP para corpo grande e verifica um novo relato com diagnóstico independente, sem copiar o texto excessivo.
+
+## 2026-10-06 - WebView2 não abria no aplicativo AnyCPU
+
+- Sintoma: o formulário abria, mas a verificação não carregava; o teste isolado de runtime retornou `BadImageFormatException` / `8007000B` em processo x64, apesar do Runtime instalado.
+- Causa raiz: sem `PlatformTarget` explícito, os targets do pacote WebView2 escolheram apenas o loader x86 para um executável que roda como x64.
+- Solução: declarar `AnyCPU` explicitamente no projeto, copiando os loaders das arquiteturas suportadas em `runtimes`, e incluir essa árvore no instalador junto das DLLs Core/Wpf. O pacote AnyCPU não gera um loader na raiz; o instalador deve seguir o layout real do build.
+- Prevenção: rodar `WinputLan.Loopback.exe --report-runtime-test` e validar a janela instalada; compilação sozinha não verifica carregamento nativo.
+
+## 2026-10-06 - Parser SQL remoto de D1 rejeitou trigger de quota
+
+- Sintoma: migration válida no SQLite/Miniflare retornou `7500: incomplete input` no endpoint remoto de query.
+- Causa: o parser de statements remoto não trata de forma confiável CRLF e `CASE ... END` interno em triggers. O parser de teste também deve manter a definição inteira do trigger, sem dividir no `END` de um CASE.
+- Solução: condição da quota em `WHEN`, corpo simples com `RAISE`, SQL normalizado para LF no envio remoto; testes preservam statements completos. Migração executada no D1 remoto e definições de `report_quota`/`report_outbox` conferidas em `sqlite_master`.
+- Prevenção: executar a migração no D1 remoto e conferir os triggers em `sqlite_master` antes de publicar. Referências: cloudflare/workers-sdk issues 14991 e 4727.
+
+## 2026-10-06 - Verificação web cobria o resultado do relato
+
+- Sintoma: o estado de erro existia na árvore de acessibilidade, mas não aparecia na janela; o WebView2 dentro do ScrollViewer desenhava sobre o rodapé.
+- Causa raiz: o WebView2 WPF usa uma janela nativa HWND, cuja região não acompanha o recorte da área rolável de WPF.
+- Solução: manter a verificação em uma região fixa fora do ScrollViewer, acima do estado e das ações; ocultar a região ao falhar a navegação. A recuperação do rascunho e a mensagem visível foram conferidas na janela real.
+- Prevenção: validar visualmente os estados sem conexão e com conteúdo expandido; a árvore de acessibilidade sozinha não prova visibilidade.
+
 ## 2026-10-05 - Duas instâncias do aplicativo após abertura manual
 
 - Sintoma: a cópia instalada iniciada com `--startup` continuava executando quando uma abertura posterior com `--elevated-relaunch` criava outra instância. Cada uma criava seu próprio auxiliar `--cursor-guard`; a primeira ocupava a porta TCP 45900 e a segunda mantinha uma conexão de saída.

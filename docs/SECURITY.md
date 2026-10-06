@@ -22,7 +22,20 @@ before allocation beyond the 64 KiB cap.
 Injected events carry a private `dwExtraInfo` marker and are ignored by the
 low-level hooks. The in-memory log stores UTC time, origin, destination, event
 kind, and status only. It has no payload field and is bounded to 500 entries.
-There is no clipboard, text extraction, screen capture, or telemetry.
+There is no clipboard, text extraction, screen capture, or background telemetry.
+The optional report window prepares a local diagnostic snapshot and sends it,
+together with the user's report text, only on an explicit submission. Operational
+metadata and log events use an allowlist; machine names, network addresses,
+pairing secrets and input payloads are excluded. Opening the verification loads
+Cloudflare Turnstile, which receives normal connection and browser information.
+
+Reports use HTTPS, an encrypted local draft and an unpredictable retry secret.
+The Worker validates Turnstile and binds it to the hostname, action and report ID.
+Atomic D1 triggers enforce acceptance quotas and commit the report/outbox together;
+retries compare fixed-size secret hashes in constant time and preserve identity.
+Notifications have fixed headers/recipient and a diagnostic JSON attachment.
+Distributed attacks or free-tier limits can still interrupt availability; the app
+preserves unconfirmed drafts. See `BUG_REPORTS_SETUP.md` for limits and retention.
 
 ## Firewall and updater
 

@@ -26,7 +26,7 @@ the controller. The displayed IP is selected from an Up,
 routed Ethernet/Wi-Fi IPv4 interface; loopback and APIPA are excluded. Each
 session has one input direction only:
 controller sends and target injects. The background option uses one
-notification-area icon with Restore and Exit; Exit alone performs final cleanup.
+notification-area icon with Restore, Reportar problema and Exit; Exit alone performs final cleanup.
 
 Input events have fixed-size binary payloads. The queue refuses to reorder
 keyboard/button events. Only a consecutive tail `MouseMove` is replaced; a
@@ -40,3 +40,12 @@ neutral graphite grouping with a visible but non-neon green reserved for
 active/success/action states. Focus, disabled, hover and pressed states are
 defined in `App.xaml`; the app avoids decorative motion and is safe under a
 reduced-motion system preference.
+
+BugReportWindow captures bounded diagnostic metadata when opened and stores one
+DPAPI-protected draft per user. Its native fields and preview stay outside the
+WebView2 bridge, which only receives the Turnstile challenge token. BugReportClient
+posts to the fixed project HTTPS endpoint, with bounded responses and stable retry
+identity. A Cloudflare Worker verifies requests and atomically persists reports
+with a D1 email outbox. A scheduled worker claims pending notifications with leases
+and retries delivery to the owner's verified inbox. This optional flow does not
+participate in the LAN input path or initialize WebView2 at normal app startup.

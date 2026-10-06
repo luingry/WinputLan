@@ -11,5 +11,6 @@
   </ItemGroup>
   <ItemGroup>
     <Reference Include="System.Security" />
+    <Reference Include="System.Net.Http" />
   </ItemGroup>
 </Project>

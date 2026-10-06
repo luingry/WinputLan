@@ -9,6 +9,19 @@ permissions:
   contents: read
 
 jobs:
+  reports:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: services/bug-reports/package-lock.json
+      - run: npm ci --no-fund --no-audit
+        working-directory: services/bug-reports
+      - run: npm test
+        working-directory: services/bug-reports
   verify:
     runs-on: windows-latest
     steps:
@@ -27,4 +40,3 @@ jobs:
       - name: Release invariants
         shell: pwsh
         run: ./scripts/validate-release.ps1 -Configuration Release
-

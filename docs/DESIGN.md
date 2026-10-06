@@ -6,9 +6,10 @@ not loose inspiration. At the 1564×1006 primary viewport the application uses a
 Máquinas → Atalhos → Registro. The rail's active state has a green leading
 stripe; rows, keycaps and the table are grouped with backgrounds and spacing,
 not wrapper borders. Pairing is a modal overlay so it never displaces those
-three operational sections. The rail deliberately contains only Atualizações:
+three operational sections. The rail contains Atualizações and Reportar problema:
 Máquinas, Atalhos and Registro are continuous dashboard sections, not
-navigation destinations. The shortcut editor uses the same in-window overlay,
+navigation destinations. A secondary "Reportar problema" action opens a separate
+native report window without changing dashboard geometry. The shortcut editor uses the same in-window overlay,
 including focusable text fields, error copy, cancel and save actions.
 
 The palette is `#101519` / `#171C20` / `#20262B`, with `#79D88B` reserved for

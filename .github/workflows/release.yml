@@ -25,6 +25,17 @@ jobs:
       - name: Build and test
         shell: pwsh
         run: ./scripts/build.ps1 -Configuration Release
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify report backend
+        shell: pwsh
+        working-directory: services/bug-reports
+        run: |
+          npm ci --no-fund --no-audit
+          if ($LASTEXITCODE -ne 0) { throw 'Report dependencies failed.' }
+          npm test
+          if ($LASTEXITCODE -ne 0) { throw 'Report backend tests failed.' }
       - name: Install Inno Setup
         shell: pwsh
         run: choco install innosetup --yes --no-progress

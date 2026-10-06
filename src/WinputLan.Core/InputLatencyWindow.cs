@@ -26,5 +26,15 @@ namespace WinputLan.Core
                 p50Milliseconds = sorted[sorted.Length / 2]; _lastPublishedUtc = utcNow; return true;
             }
         }
+        // Does not change UI publication throttling or consume samples.
+        public double[] Snapshot()
+        {
+            lock (_gate)
+            {
+                var sorted = _values.OrderBy(value => value).ToArray();
+                if (sorted.Length == 0) return new double[] { 0, 0, 0, 0 };
+                return new[] { (double)sorted.Length, sorted[sorted.Length / 2], sorted[(int)Math.Ceiling(sorted.Length * .95) - 1], sorted[sorted.Length - 1] };
+            }
+        }
     }
 }

@@ -1,0 +1,14 @@
+{
+  "name": "winputlan-bug-reports",
+  "main": "worker.js",
+  "compatibility_date": "2026-10-06",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [{ "pattern": "bugs.luingry.com.br", "custom_domain": true }],
+  "d1_databases": [{ "binding": "DB", "database_name": "winputlan-bug-reports", "database_id": "bd3b96bb-3505-4217-9ca9-aa6ca0d730a5", "migrations_dir": "migrations" }],
+  "vars": { "REPORT_HOST": "bugs.luingry.com.br", "TURNSTILE_SITEKEY": "0x4AAAAAAFPu3hbij7VJv8kj", "EMAIL_FROM": "winputlan-feedback@luingry.com.br" },
+  "send_email": [{ "name": "EMAIL", "destination_address": "winputlan-feedback@luingry.com.br" }],
+  "ratelimits": [{ "name": "ABUSE_RATE", "namespace_id": "102628", "simple": { "limit": 10, "period": 60 } }],
+  "triggers": { "crons": ["*/5 * * * *"] },
+  "observability": { "enabled": false }
+}

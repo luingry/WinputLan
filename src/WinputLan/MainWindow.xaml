@@ -11,6 +11,7 @@
    <Grid Grid.Column="0" Background="{StaticResource RailBrush}"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
     <StackPanel Margin="14,20,14,0">
      <Button x:Name="UpdatesButton" Style="{StaticResource RailButtonActive}" Click="UpdatesButton_Click"><StackPanel Orientation="Horizontal"><controls:Icon Data="{StaticResource Icon.Download}" Width="18" Height="18" VerticalAlignment="Center"/><TextBlock x:Name="UpdatesButtonText" Text="Atualizações" FontSize="14" FontWeight="SemiBold" Margin="12,0,0,0" VerticalAlignment="Center"/></StackPanel></Button>
+     <Button Style="{StaticResource RailButton}" Click="ReportBug_Click" AutomationProperties.Name="Reportar problema"><StackPanel Orientation="Horizontal"><controls:Icon Data="{StaticResource Icon.FileText}" Width="18" Height="18" VerticalAlignment="Center"/><TextBlock Text="Reportar problema" FontSize="14" FontWeight="SemiBold" Margin="12,0,0,0" VerticalAlignment="Center"/></StackPanel></Button>
     </StackPanel>
    </Grid>
    <ScrollViewer Grid.Column="1" x:Name="DashboardScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><Grid Margin="32,26,32,36" MinWidth="650"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>

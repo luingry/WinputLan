@@ -8,3 +8,7 @@ artifacts/
 *.download
 *.tmp
 .vs/
+**/node_modules/
+**/.wrangler/
+**/.dev.vars
+services/bug-reports/wrangler.production.jsonc
