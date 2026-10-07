@@ -59,7 +59,9 @@ namespace WinputLan.Core
             {
                 if (_localDown.Remove(id)) return InputRoute.Local;
                 if (_remoteDown.Remove(id)) return InputRoute.Remote;
-                return _remoteActive ? InputRoute.Remote : InputRoute.Local;
+                // A press this state never saw happened before the hook (or was forgotten by ReleaseAll). Windows may
+                // hold that key down here, so swallowing its release would leave it stuck; a stray release is harmless.
+                return InputRoute.Local;
             }
         }
 

@@ -5,6 +5,13 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.30] - 2026-10-07
+
+### Fixed
+
+- Shortcut keys (Ctrl/Shift/Alt and the terminal key) no longer stay pressed on the controlling PC after the first switch following startup or pairing. The shortcut that starts the connection switches control while it is still held, before the input hooks had seen those keys; their releases were sent to the controlled PC and blocked locally. Keys already held when the hooks start are now recorded, and a release whose press was never seen always stays local.
+- Hiding the cursor no longer runs on the input hook thread. Relaunching the cursor guard after a slow startup could stall input for seconds, making Windows skip the hook so key releases never reached the controlled PC.
+
 ## [0.3.29] - 2026-10-07
 
 ### Changed

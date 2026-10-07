@@ -60,7 +60,7 @@ namespace WinputLan.Runtime
         private readonly SendInputSink _localInjector = new SendInputSink(SendInputSink.HandoverTag);
         private readonly HandoverReplayGuard _replayGuard = new HandoverReplayGuard();
         private readonly InputRoutingState _routing = new InputRoutingState();
-        private readonly CursorVisibilityGuard _cursorVisibility = CursorVisibilityGuard.Shared;
+        private readonly CursorVisibilityWorker _cursorVisibility = new CursorVisibilityWorker(CursorVisibilityGuard.Shared);
         private NativeMethods.HookProc _keyboardProc;
         private NativeMethods.HookProc _mouseProc;
         private IntPtr _keyboardHook;
@@ -138,6 +138,8 @@ namespace WinputLan.Runtime
             _module = NativeMethods.GetModuleHandle(Process.GetCurrentProcess().MainModule.ModuleName);
             _keyboardHook = NativeMethods.SetWindowsHookEx(WhKeyboardLl, _keyboardProc, _module, 0);
             _mouseHook = NativeMethods.SetWindowsHookEx(WhMouseLl, _mouseProc, _module, 0);
+            // Callbacks only run once this thread pumps, so the seed cannot interleave with them.
+            if (_keyboardHook != IntPtr.Zero) SeedHeldKeys();
             started.Set();
             try
             {
@@ -154,10 +156,33 @@ namespace WinputLan.Runtime
             {
                 // The loop no longer pumps, so injected keys would stall on our own hook: nothing is handed back.
                 ApplyRemote(false, false);
+                _cursorVisibility.Stop();
                 if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
                 if (_mouseHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_mouseHook);
                 _keyboardHook = IntPtr.Zero;
                 _mouseHook = IntPtr.Zero;
+            }
+        }
+
+        // The hooks start when a session connects, often while the shortcut that asked for it is still held. Keys
+        // already down would otherwise be unknown: a switch would not hand their modifiers over, and their repeats
+        // would go to the remote. They are recorded as pressed here, as if the hook had seen them go down.
+        private void SeedHeldKeys()
+        {
+            var now = DateTime.UtcNow.Ticks;
+            for (var vk = 0x08; vk <= 0xFE; vk++)
+            {
+                // Generic Shift/Ctrl/Alt never reach a low-level hook; their left/right codes do.
+                if (vk == 0x10 || vk == 0x11 || vk == 0x12 || (NativeMethods.GetAsyncKeyState(vk) & 0x8000) == 0) continue;
+                var key = (ushort)vk;
+                _routing.Press(InputRoutingState.KeyId(key));
+                if (!ModifierHandover.IsHandoverKey(key) && key != 0x5B && key != 0x5C) continue;
+                var flags = key == 0xA3 || key == 0xA5 || key == 0x5B || key == 0x5C ? KeyInjection.HookExtendedFlag : 0U;
+                var press = InputEvent.Key(InputKind.KeyDown, key, (ushort)NativeMethods.MapVirtualKey(key, 0), flags, now);
+                if (ModifierHandover.IsHandoverKey(key)) _heldModifiers[key] = press;
+                // Only modifiers: a held terminal key fed here would fire the shortcut again.
+                HotkeyAction? ignored;
+                if (_hotkeyChordDetector != null) _hotkeyChordDetector.TryHandle(press, out ignored);
             }
         }
 
@@ -184,13 +209,13 @@ namespace WinputLan.Runtime
                 _anchor = AnchorFor(_restore);
                 NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
                 HandOverModifiers(_routing.SetRemoteActive(true), true);
-                _cursorVisibility.TryHide();
+                _cursorVisibility.Set(false);
             }
             else
             {
                 var handed = _routing.SetRemoteActive(false);
                 if (handOver) HandOverModifiers(handed, false);
-                _cursorVisibility.Show();
+                _cursorVisibility.Set(true);
                 // Back through the target's edge: appear at the matching spot of this PC's edge.
                 if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, edgeArgument - 1, EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
                 BeginSettle(_anchor);
@@ -379,6 +404,63 @@ namespace WinputLan.Runtime
                 }
             }
             return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
+        }
+    }
+
+    // Hiding the cursor may relaunch the guard helper (up to 3 s) or replace system cursors. On the hook thread that
+    // stalls all input; past the low-level hook timeout Windows skips the hook, so key releases pressed on the remote
+    // would never reach it. Requests run in order on this thread; only the latest wanted state is applied.
+    internal sealed class CursorVisibilityWorker
+    {
+        private readonly CursorVisibilityGuard _guard;
+        private readonly object _gate = new object();
+        private Thread _thread;
+        private bool _wantVisible = true;
+        private bool _pending;
+        private bool _stopped;
+
+        internal CursorVisibilityWorker(CursorVisibilityGuard guard) { _guard = guard; }
+
+        internal void Set(bool visible)
+        {
+            lock (_gate)
+            {
+                if (_stopped) return;
+                _wantVisible = visible;
+                _pending = true;
+                if (_thread == null)
+                {
+                    _thread = new Thread(Run) { IsBackground = true, Name = "WinputLan cursor visibility" };
+                    _thread.Start();
+                }
+                Monitor.Pulse(_gate);
+            }
+        }
+
+        // Ends the worker and leaves the cursor visible, waiting for an operation in progress.
+        internal void Stop()
+        {
+            Thread thread;
+            lock (_gate) { _stopped = true; thread = _thread; Monitor.Pulse(_gate); }
+            if (thread != null) thread.Join(5000);
+            _guard.Show();
+        }
+
+        private void Run()
+        {
+            while (true)
+            {
+                bool visible;
+                lock (_gate)
+                {
+                    while (!_pending && !_stopped) Monitor.Wait(_gate);
+                    if (_stopped) return;
+                    visible = _wantVisible;
+                    _pending = false;
+                }
+                try { if (visible) _guard.Show(); else _guard.TryHide(); }
+                catch { }
+            }
         }
     }
 
@@ -660,6 +742,8 @@ namespace WinputLan.Runtime
         [DllImport("kernel32.dll")] internal static extern uint GetCurrentThreadId();
         [DllImport("user32.dll", SetLastError = true)] internal static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
         [DllImport("user32.dll")] internal static extern int GetSystemMetrics(int nIndex);
+        [DllImport("user32.dll")] internal static extern short GetAsyncKeyState(int virtualKey);
+        [DllImport("user32.dll")] internal static extern uint MapVirtualKey(uint code, uint mapType);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool GetCursorPos(out POINT point);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool SetCursorPos(int x, int y);
         [DllImport("user32.dll")] internal static extern int GetMessage(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax);

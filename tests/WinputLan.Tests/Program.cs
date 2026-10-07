@@ -408,6 +408,10 @@ namespace WinputLan.Tests
             Assert(ModifierHandover.IsHandoverKey(0xA5) && !ModifierHandover.IsHandoverKey(0x5C) && !ModifierHandover.IsHandoverKey('2'), "handover set is Ctrl/Shift/Alt only");
             Assert(routing.Continuous() == InputRoute.Local && routing.Press(two) == InputRoute.Local, "local machine owns input again");
             Assert(InputRoutingState.ButtonId(0x0201) != InputRoutingState.KeyId(0x01), "button ids never collide with virtual keys");
+            // Hook installed while the shortcut was held (first switch after boot): those presses were never seen.
+            var late = new InputRoutingState();
+            late.SetRemoteActive(true);
+            Assert(late.Release(ctrl) == InputRoute.Local && late.Release(InputRoutingState.KeyId((ushort)'N')) == InputRoute.Local, "a release whose press was never seen stays local, never stuck");
         }
 
         private static void TestAccessCodeMask()

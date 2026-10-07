@@ -60,6 +60,14 @@
 - Solução: mutex por usuário/sessão antes de configurações, elevação, hooks ou rede; evento de ativação restaura a janela existente em aberturas manuais. Objetos têm ACL do usuário e integridade média para funcionar entre processos normais/elevados. O relançamento elevado aguarda o processo anterior sair; o auxiliar do cursor continua fora dessa proteção.
 - Prevenção: testes em processos isolados cobrem aberturas simultâneas, ativação, recuperação após queda e transferência entre processos. `WinputLan.Loopback.exe --instance-ui-test` também verifica a restauração de janelas WPF ocultas/minimizadas no desktop interativo, fora dos requisitos de foco do CI. Nunca usar o teste para iniciar hooks ou interferir na sessão remota do usuário.
 
+## 2026-10-07 - Teclas do atalho presas no pareamento inicial / primeira troca após ligar o PC
+
+- Sintoma: na primeira troca após ligar o PC (ou logo após parear), uma ou mais teclas do atalho (Ctrl/Shift/Alt/N) ficavam pressionadas no PC controlador até serem apertadas de novo. Trocas seguintes funcionavam.
+- Causa raiz (dedução, sem reprodução ao vivo): os hooks só são instalados em `EnsureControllerCapture`, quando a sessão conecta. Na primeira troca o atalho chega pelo `RegisterHotKey`, dispara a (re)conexão e, com aceite automático, a sessão conecta e troca para o remoto enquanto o atalho ainda está pressionado. O hook nunca viu essas teclas descerem; quando eram soltas, `InputRoutingState.Release` mandava qualquer tecla desconhecida para o remoto (com o remoto ativo) e o hook engolia o "soltar" local. O Windows continuava com a tecla pressionada no controlador.
+- Solução: (1) `Release` de uma tecla/botão cujo "pressionar" não foi visto agora é sempre local (um "soltar" a mais é inofensivo). (2) `LowLevelInputCapture.SeedHeldKeys` registra, ao instalar o hook, as teclas já pressionadas (`GetAsyncKeyState`) na rota local, nos modificadores transferíveis e no detector do atalho, então a primeira troca transfere os modificadores como as demais.
+- Risco relacionado, corrigido junto: `CursorVisibilityGuard.TryHide` rodava na thread do hook e podia relançar o auxiliar do cursor (espera de até 3 s) se ele não tivesse subido no boot. Acima do `LowLevelHooksTimeout`, o Windows pula o hook e o "soltar" de teclas transferidas não chega ao PC controlado. Agora `CursorVisibilityWorker` aplica esconder/mostrar em thread própria, sempre o último estado pedido.
+- Prevenção: qualquer estado que acompanha pares pressionar/soltar precisa considerar teclas pressionadas antes de começar a observar. Nada lento (processo, I/O, espera) pode rodar na thread do hook. Teste Core `a release whose press was never seen stays local, never stuck`.
+
 ## 2026-10-02 - Modificadores do atalho presos no PC controlador após voltar (0.3.18–0.3.24)
 
 - Sintoma: às vezes, depois de trocar com o atalho (Ctrl+Shift+Alt+N), Ctrl/Shift/Alt ficavam pressionados e era preciso apertá-los de novo para soltar.
