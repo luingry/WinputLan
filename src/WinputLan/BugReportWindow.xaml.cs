@@ -1,12 +1,11 @@
 using System;
 using System.ComponentModel;
 using System.IO;
-using System.Linq;
 using System.Runtime.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
-using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -22,46 +21,41 @@ namespace WinputLan
             [DataMember(Name="type")] public string Type { get; set; }
             [DataMember(Name="token")] public string Token { get; set; }
         }
-        private BugReportDraft _draft;
-        private readonly BugReport _snapshot;
-        private readonly BugReportDraftStore _store;
+        private readonly BugReportAttempt _attempt;
         private readonly BugReportClient _client = new BugReportClient();
         private readonly CancellationTokenSource _lifetime = new CancellationTokenSource();
-        private readonly DispatcherTimer _saveTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(600) };
+        private readonly DispatcherTimer _challengeRetry = new DispatcherTimer { Interval = TimeSpan.FromSeconds(15) };
+        private readonly DispatcherTimer _successClose = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         private WebView2 _web;
         private string _token;
-        private bool _busy, _ready, _closed, _sent, _preparing, _restored;
-        public BugReportWindow(BugReport snapshot, string draftDirectory = null)
+        private bool _busy, _ready, _closed, _sent, _preparing;
+        public BugReportWindow(BugReport snapshot)
         {
-            InitializeComponent(); _snapshot = snapshot;
-            _store = new BugReportDraftStore(draftDirectory ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan", "reports"));
-            _draft = _store.Load(); _restored = _draft != null;
-            if(_draft == null) _draft = BugReportDraft.Create(snapshot);
-            _saveTimer.Tick += (s,e) => { _saveTimer.Stop(); SaveDraft(); };
+            InitializeComponent();
+            _attempt = BugReportAttempt.Create(BugReportJson.NewFromSnapshot(snapshot));
+            _challengeRetry.Tick += async (s,e) => { _challengeRetry.Stop(); if (!_busy && !_sent) await PrepareChallengeAsync(); };
+            _successClose.Tick += (s,e) => { _successClose.Stop(); if (!_closed) Close(); };
             Populate();
         }
         private void Populate()
         {
             _ready = false;
-            TitleBox.Text = _draft.Report.Title; DescriptionBox.Text = _draft.Report.Description; StepsBox.Text = _draft.Report.Steps;
-            DiagnosticPreview.Text = BugReportJson.Preview(_draft.Report);
-            TitleBox.IsReadOnly = DescriptionBox.IsReadOnly = StepsBox.IsReadOnly = _draft.Frozen;
+            TitleBox.Text = _attempt.Report.Title; DescriptionBox.Text = _attempt.Report.Description; StepsBox.Text = _attempt.Report.Steps;
+            TitleBox.IsReadOnly = DescriptionBox.IsReadOnly = StepsBox.IsReadOnly = _attempt.Frozen;
             _ready = true;
         }
         private async void Window_Loaded(object sender, RoutedEventArgs e)
         {
             TitleBox.Focus();
             var network = await Task.Run(() => BugReportDiagnostics.GetNetworkType()); if (_closed) return;
-            if(!ReferenceEquals(_snapshot,_draft.Report) || !_draft.Frozen) _snapshot.Diagnostics.Metadata["networkType"] = network;
-            if(!_restored && !_draft.Frozen) { _draft.Report.Diagnostics.Metadata["networkType"] = network; Populate(); }
-            StatusText.Text = _draft.Frozen ? "Rascunho de uma tentativa anterior recuperado. Reenvie para confirmar o resultado." : _restored ? "Rascunho recuperado. O diagnóstico original foi preservado." : "Descreva o problema. O diagnóstico foi capturado ao abrir esta janela.";
+            if(!_attempt.Frozen) _attempt.Report.Diagnostics.Metadata["networkType"] = network;
             await PrepareChallengeAsync();
         }
         private async Task PrepareChallengeAsync()
         {
-            if (_preparing || _closed) return;
-            _preparing = true; VerifyButton.IsEnabled = false;
-            _token = null; ChallengeHost.Visibility = Visibility.Visible; UpdateSend();
+            if (_preparing || _closed || _sent) return;
+            _preparing = true; _challengeRetry.Stop();
+            _token = null; ChallengeHost.Visibility = Visibility.Collapsed; UpdateSend();
             try {
                 if (_web == null) {
                     _web = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.FromArgb(23,28,32) }; ChallengeHost.Children.Add(_web);
@@ -77,77 +71,101 @@ namespace WinputLan
                     core.NewWindowRequested += (s,e) => e.Handled = true;
                     core.DownloadStarting += (s,e) => e.Cancel = true;
                     core.PermissionRequested += (s,e) => e.State = CoreWebView2PermissionState.Deny;
-                    core.NavigationCompleted += (s,e) => { if(!e.IsSuccess) { _token = null; ChallengeHost.Visibility = Visibility.Collapsed; UpdateSend(); StatusText.Text = "Verificação indisponível. O rascunho fica salvo; tente novamente quando houver conexão."; } };
-                    core.ProcessFailed += (s,e) => { _token = null; UpdateSend(); StatusText.Text = "A verificação foi interrompida. Feche e reabra o relato para tentar novamente."; };
+                    core.NavigationCompleted += (s,e) => { if(!e.IsSuccess) ChallengeUnavailable("Verificação indisponível. Confira a conexão; tentaremos novamente automaticamente."); };
+                    core.ProcessFailed += (s,e) => {
+                        ChallengeUnavailable("A verificação foi interrompida. Tentaremos novamente automaticamente.");
+                        _web?.Dispose(); ChallengeHost.Children.Clear(); _web = null;
+                    };
                     core.WebMessageReceived += ChallengeReceived;
                 }
-                if (!_closed) _web.CoreWebView2.Navigate(new Uri(BugReportClient.ServiceUri, "challenge?id=" + _draft.Report.Id).AbsoluteUri);
-            } catch { if(!_closed) { if(_web != null && _web.CoreWebView2 == null) { _web.Dispose(); ChallengeHost.Children.Clear(); _web = null; } ChallengeHost.Visibility = Visibility.Collapsed; StatusText.Text = "Não foi possível abrir a verificação. Confira a conexão e o Microsoft Edge WebView2 Runtime. Seu rascunho permanece disponível."; } }
-            finally { _preparing = false; if(!_closed) VerifyButton.IsEnabled = !_busy; }
+                if (!_closed) _web.CoreWebView2.Navigate(new Uri(BugReportClient.ServiceUri, "challenge?id=" + _attempt.Report.Id).AbsoluteUri);
+            } catch { if(!_closed) { if(_web != null && _web.CoreWebView2 == null) { _web.Dispose(); ChallengeHost.Children.Clear(); _web = null; } ChallengeUnavailable("Não foi possível abrir a verificação. Confira a conexão e o Microsoft Edge WebView2 Runtime."); } }
+            finally { _preparing = false; }
+        }
+        private void ChallengeUnavailable(string message)
+        {
+            if (_closed || _sent) return;
+            _token = null; ChallengeHost.Visibility = Visibility.Collapsed;
+            if (!_busy) SetStatus(message);
+            UpdateSend(); _challengeRetry.Start();
+        }
+        private void SetStatus(string message)
+        {
+            StatusText.Text = message;
+            StatusText.Visibility = string.IsNullOrEmpty(message) ? Visibility.Collapsed : Visibility.Visible;
         }
         private bool AllowedPage(string address)
         {
-            Uri uri; return Uri.TryCreate(address, UriKind.Absolute, out uri) && uri.Scheme == "https" && uri.Host == BugReportClient.ServiceUri.Host && uri.IsDefaultPort && uri.AbsolutePath == "/challenge" && uri.Query == "?id=" + _draft.Report.Id;
+            Uri uri; return Uri.TryCreate(address, UriKind.Absolute, out uri) && uri.Scheme == "https" && uri.Host == BugReportClient.ServiceUri.Host && uri.IsDefaultPort && uri.AbsolutePath == "/challenge" && uri.Query == "?id=" + _attempt.Report.Id;
         }
         private void ChallengeReceived(object sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
-            if (_closed || !AllowedPage(e.Source) || e.WebMessageAsJson.Length > 3000) return;
+            if (_closed || _sent || !AllowedPage(e.Source) || e.WebMessageAsJson.Length > 3000) return;
             try {
                 var message = BugReportJson.Deserialize<ChallengeMessage>(System.Text.Encoding.UTF8.GetBytes(e.WebMessageAsJson));
-                if (message.Type == "token" && !string.IsNullOrEmpty(message.Token) && message.Token.Length <= 2048) _token = message.Token;
-                else if (message.Type == "expired" || message.Type == "error") _token = null;
+                if (message.Type == "token" && !string.IsNullOrEmpty(message.Token) && message.Token.Length <= 2048) {
+                    _token = message.Token; _challengeRetry.Stop(); ChallengeHost.Visibility = Visibility.Collapsed;
+                    if (!_busy && !_attempt.Frozen) SetStatus("");
+                }
+                else if (message.Type == "interactive") {
+                    _token = null; _challengeRetry.Stop(); ChallengeHost.Visibility = Visibility.Visible;
+                    if (!_busy && !_attempt.Frozen) SetStatus("Conclua a verificação para enviar seu relato.");
+                }
+                else if (message.Type == "noninteractive") ChallengeHost.Visibility = Visibility.Collapsed;
+                else if (message.Type == "expired") { _token = null; ChallengeHost.Visibility = Visibility.Collapsed; }
+                else if (message.Type == "error") {
+                    ChallengeUnavailable("Verificação indisponível. Tentaremos novamente automaticamente.");
+                }
                 UpdateSend();
             } catch { _token = null; UpdateSend(); }
         }
         private void Fields_Changed(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
-            if (!_ready || _draft.Frozen) return;
-            _draft.Report.Title = TitleBox.Text; _draft.Report.Description = DescriptionBox.Text; _draft.Report.Steps = StepsBox.Text;
-            _saveTimer.Stop(); _saveTimer.Start(); UpdateSend();
-        }
-        private bool SaveDraft()
-        {
-            if(_sent) return true;
-            try { _store.Save(_draft); return true; }
-            catch(InvalidOperationException ex) { StatusText.Text = ex.Message + " Reduza a descrição ou os passos para salvar o rascunho."; return false; }
-            catch { StatusText.Text = "Não foi possível salvar o rascunho neste PC. Tente novamente antes de enviar."; return false; }
+            if (!_ready || _attempt.Frozen) return;
+            _attempt.Report.Title = TitleBox.Text; _attempt.Report.Description = DescriptionBox.Text; _attempt.Report.Steps = StepsBox.Text;
+            UpdateSend();
         }
         // A frozen retry may confirm an existing durable receipt even while CAPTCHA is unavailable.
-        private void UpdateSend() { if(SendButton != null) SendButton.IsEnabled = _ready && !_busy && !_sent && (_token != null || _draft.Frozen) && BugReportJson.Validate(_draft.Report) == null; }
+        private void UpdateSend() { if(SendButton != null) SendButton.IsEnabled = _ready && !_busy && !_sent && (_token != null || _attempt.Frozen) && BugReportJson.Validate(_attempt.Report) == null; }
         private async void Send_Click(object sender, RoutedEventArgs e)
         {
-            if (_busy || (_token == null && !_draft.Frozen) || BugReportJson.Validate(_draft.Report) != null) return;
-            try { BugReportJson.Serialize(new BugReportSubmission { Report = _draft.Report, Secret = _draft.Secret, Token = _token ?? "" }); }
-            catch(InvalidOperationException ex) { StatusText.Text = ex.Message + " Reduza a descrição ou os passos antes de enviar."; return; }
-            _draft.Frozen = true; if(!SaveDraft()) { _draft.Frozen = false; return; }
-            Populate(); _busy = true; NewButton.IsEnabled = VerifyButton.IsEnabled = false; SendButton.Content = "Enviando…"; UpdateSend();
-            StatusText.Text = "Enviando relato com diagnóstico técnico…";
+            if (_busy || _sent || (_token == null && !_attempt.Frozen) || BugReportJson.Validate(_attempt.Report) != null) return;
+            try { BugReportJson.Serialize(new BugReportSubmission { Report = _attempt.Report, Secret = _attempt.Secret, Token = _token ?? "" }); }
+            catch(InvalidOperationException ex) { SetStatus(ex.Message + " Reduza a descrição ou os passos antes de enviar."); return; }
+            _attempt.Frozen = true;
+            Populate(); _busy = true; _challengeRetry.Stop(); SendButton.Content = "Enviando…"; UpdateSend();
+            SetStatus("Enviando relato…");
             try {
-                var receipt = await _client.SendAsync(_draft, _token, _lifetime.Token);
-                if(_closed) return; _sent = true; try { _store.Clear(); } catch { /* Receipt is already confirmed; a stale draft remains safe to retry. */ }
-                StatusText.Text = "Relato recebido. Protocolo: " + receipt + "\nA notificação por e-mail será enviada em segundo plano.";
-                ChallengeHost.Visibility = Visibility.Collapsed; VerifyButton.Visibility = Visibility.Collapsed;
-            } catch(OperationCanceledException) { if(!_closed) StatusText.Text = "O envio não foi confirmado a tempo. O rascunho foi preservado; tente novamente."; }
-              catch(Exception ex) { if(!_closed) StatusText.Text = ex is InvalidOperationException ? ex.Message : "Não foi possível confirmar o envio. O rascunho foi preservado; tente novamente."; }
+                await _client.SendAsync(_attempt, _token, _lifetime.Token);
+                if(_closed) return;
+                ShowSuccess();
+            } catch(OperationCanceledException) { if(!_closed) SetStatus("O envio não foi confirmado a tempo. Tente novamente nesta janela."); }
+              catch(Exception ex) { if(!_closed) SetStatus(ex is InvalidOperationException ? ex.Message : "Não foi possível confirmar o envio. Tente novamente nesta janela."); }
             finally {
-                _busy = false; if(!_closed) { SendButton.Content = _sent ? "Recebido" : "Tentar novamente"; NewButton.IsEnabled = VerifyButton.IsEnabled = true; UpdateSend(); if(!_sent) await PrepareChallengeAsync(); }
+                _busy = false; if(!_closed && !_sent) { SendButton.Content = "Tentar novamente"; UpdateSend(); await PrepareChallengeAsync(); }
             }
         }
-        private async void Verify_Click(object sender, RoutedEventArgs e) { if(!_busy) await PrepareChallengeAsync(); }
-        private async void New_Click(object sender, RoutedEventArgs e)
+        private void ShowSuccess()
         {
-            if(_busy) return;
-            if(!_sent && (!string.IsNullOrEmpty(_draft.Report.Title) || !string.IsNullOrEmpty(_draft.Report.Description)) && MessageBox.Show(this,"Descartar o rascunho e iniciar um novo relato? Uma tentativa anterior pode já ter sido recebida.","Novo relato",MessageBoxButton.YesNo,MessageBoxImage.Question)!=MessageBoxResult.Yes)return;
-            try { _store.Clear(); } catch { StatusText.Text = "Não foi possível remover o rascunho. Confira a permissão de gravação deste PC."; return; }
-            var fresh = BugReportJson.NewFromSnapshot(_snapshot);
-            _draft = BugReportDraft.Create(fresh); _sent = false; _restored = false; Populate(); ChallengeHost.Visibility = VerifyButton.Visibility = Visibility.Visible;
-            SendButton.Content = "Enviar relato"; StatusText.Text = "Novo relato. O diagnóstico continua sendo o snapshot da abertura."; await PrepareChallengeAsync();
+            _sent = true; _token = null; _challengeRetry.Stop();
+            ChallengeHost.Visibility = Visibility.Collapsed;
+            SetStatus(""); UpdateSend();
+            ReportForm.Visibility = Visibility.Collapsed;
+            SuccessOverlay.Visibility = Visibility.Visible;
+            SuccessOverlay.Focus();
+            _successClose.Start();
         }
+        private void Chrome_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount == 2) ToggleMaximize(); else DragMove();
+        }
+        private void Minimize_Click(object sender, RoutedEventArgs e) { WindowState = WindowState.Minimized; }
+        private void Maximize_Click(object sender, RoutedEventArgs e) { ToggleMaximize(); }
+        private void ToggleMaximize() { WindowState = WindowState == WindowState.Maximized ? WindowState.Normal : WindowState.Maximized; }
         private void Close_Click(object sender, RoutedEventArgs e) { Close(); }
         private void Window_Closing(object sender, CancelEventArgs e)
         {
-            _saveTimer.Stop();
-            if (!SaveDraft() && MessageBox.Show(this, "Não foi possível salvar o rascunho. Fechar mesmo assim? Copie o texto antes de fechar se quiser preservá-lo.", "Rascunho não salvo", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) { e.Cancel = true; return; }
+            _challengeRetry.Stop(); _successClose.Stop();
             _closed = true; _lifetime.Cancel(); _web?.Dispose(); _client.Dispose(); _lifetime.Dispose();
         }
     }

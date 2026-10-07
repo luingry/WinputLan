@@ -1,3 +1,5 @@
+import {buildReportEmail} from './report-email.js';
+
 const MAX_BODY = 96 * 1024;
 const STATES = ['Offline','Connecting','Pairing','Connected','Reconnecting','Faulted'];
 const TYPES = ['Session','Config','Hooks','Transport','Access','Listener','Target','Edge','Input','Pairing','Startup','Update','Atalhos','Input.MouseMove','Input.MouseDelta','Input.MouseWheel','Input.MouseDown','Input.MouseUp','Input.KeyDown','Input.KeyUp','Input.ReleaseAll','Input.Focus'];
@@ -60,9 +62,12 @@ export async function acceptReport(request,env,fetchImpl=fetch,now=Date.now()) {
  if(env.ABUSE_RATE && !(await env.ABUSE_RATE.limit({key:ipHash})).success)throw new RequestError(429,'Muitas tentativas. Tente mais tarde.');
  if(!await budget(env.DB,'attempt:'+ipHash+':'+Math.floor(now/60000),20,second+120))throw new RequestError(429,'Muitas tentativas. Tente mais tarde.');
  const previous=await stored(env.DB,body.report.id,secretHash,contentHash);if(previous)return previous;
- if(!await budget(env.DB,'verify:'+day,10000,second+172800))throw new RequestError(429,'Limite diário de tentativas atingido.');
  if(typeof body.token!=='string'||body.token.length>2048)bad();
  if(body.token.length<1)throw new RequestError(403,'Refaça a verificação de segurança.');
+ // Stored receipts above remain confirmable without CAPTCHA or verification budget.
+ // Invalid tokens must not let one IP consume the shared daily capacity.
+ if(!await budget(env.DB,'verify-ip:'+ipHash,20,second+172800))throw new RequestError(429,'Limite diário de verificações atingido. Tente mais tarde.');
+ if(!await budget(env.DB,'verify:'+day,10000,second+172800))throw new RequestError(429,'Limite diário de tentativas atingido.');
  let verification;
  try { const res=await fetchImpl('https://challenges.cloudflare.com/turnstile/v0/siteverify',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({secret:env.TURNSTILE_SECRET,response:body.token,remoteip:ip}),signal:AbortSignal.timeout(8000)}); if(!res.ok)throw new Error();verification=await res.json(); }
  catch {throw new RequestError(503,'Não foi possível verificar agora. Tente novamente.');}
@@ -79,10 +84,9 @@ export async function deliver(env,now=Date.now()) {
   if(!await budget(env.DB,'email:'+day,100,second+172800)) {await env.DB.prepare('UPDATE outbox SET lease_until=0,next_attempt=?,attempts=attempts-1 WHERE report_id=?').bind((day+1)*86400,item.report_id).run();continue;}
   try {
    const row=await env.DB.prepare('SELECT body FROM reports WHERE id=?').bind(item.report_id).first(); if(!row)throw new Error(); const report=JSON.parse(row.body);
-   // Fixed headers/recipient; no visitor-controlled addresses or HTML.
+   // Fixed headers/recipient; visitor text is escaped by the email template.
    await env.EMAIL.send({from:env.EMAIL_FROM,to:env.EMAIL_TO,subject:'[Winput LAN] Report WLR-'+item.report_id,
-    text:'Protocolo: WLR-'+item.report_id+'\n\n'+report.title+'\n\nO que aconteceu:\n'+report.description+'\n\nComo reproduzir:\n'+report.steps+'\n\nDiagnóstico técnico no anexo.',
-    attachments:[{filename:'winputlan-diagnostic.json',type:'application/json',disposition:'attachment',content:new TextEncoder().encode(JSON.stringify(report.diagnostics,null,2))}]});
+    ...buildReportEmail(report)});
    await env.DB.prepare('UPDATE outbox SET sent=?,lease_until=0 WHERE report_id=?').bind(second,item.report_id).run();
   } catch {
    await env.DB.prepare('UPDATE outbox SET lease_until=0,next_attempt=?,failed=? WHERE report_id=?').bind(second+Math.min(86400,60*2**claim.attempts),claim.attempts>=8?1:0,item.report_id).run();
@@ -93,7 +97,7 @@ export async function deliver(env,now=Date.now()) {
 function challenge(url,env) {
  const id=url.searchParams.get('id'); if(!/^[a-f0-9]{32}$/.test(id||''))return json({error:'Identificador inválido.'},400);
  const nonce=crypto.randomUUID().replaceAll('-','');
- const page='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style nonce="'+nonce+'">body{margin:0;background:#171c20;color:#dbe5df;font:13px Segoe UI}#message{padding:4px}</style><div id="challenge"></div><div id="message">Verificando segurança…</div><script nonce="'+nonce+'">function send(v){if(window.chrome&&window.chrome.webview)window.chrome.webview.postMessage(v);}function ready(){turnstile.render("#challenge",{sitekey:'+JSON.stringify(env.TURNSTILE_SITEKEY)+',action:"bug_report",cData:'+JSON.stringify(id)+',theme:"dark",callback:function(token){document.getElementById("message").textContent="Verificação concluída";send({type:"token",token:token});},"expired-callback":function(){send({type:"expired"});},"error-callback":function(){document.getElementById("message").textContent="Verificação indisponível. Tente novamente.";send({type:"error"});}});}</script><script nonce="'+nonce+'" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=ready&amp;render=explicit" defer></script></html>';
+ const page='<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style nonce="'+nonce+'">body{margin:0;background:#171c20;color:#dbe5df;font:13px Segoe UI}</style><div id="challenge"></div><script nonce="'+nonce+'">function send(v){if(window.chrome&&window.chrome.webview)window.chrome.webview.postMessage(v);}function ready(){turnstile.render("#challenge",{sitekey:'+JSON.stringify(env.TURNSTILE_SITEKEY)+',action:"bug_report",cData:'+JSON.stringify(id)+',theme:"dark",appearance:"interaction-only","refresh-expired":"auto","refresh-timeout":"auto","before-interactive-callback":function(){send({type:"interactive"});},"after-interactive-callback":function(){send({type:"noninteractive"});},"timeout-callback":function(){send({type:"expired"});},callback:function(token){send({type:"token",token:token});},"expired-callback":function(){send({type:"expired"});},"error-callback":function(){send({type:"error"});}});}</script><script nonce="'+nonce+'" src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=ready&amp;render=explicit" defer></script></html>';
  return new Response(page,{headers:headers({'Content-Type':'text/html;charset=utf-8','Content-Security-Policy':"default-src 'none'; script-src 'nonce-"+nonce+"' https://challenges.cloudflare.com; style-src 'nonce-"+nonce+"'; frame-src https://challenges.cloudflare.com; connect-src https://challenges.cloudflare.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"})});
 }
 export default {
@@ -105,7 +109,7 @@ export default {
    if(url.pathname==='/challenge'&&request.method==='GET')return challenge(url,env);
    if(url.pathname==='/api/reports'&&request.method==='POST')return await acceptReport(request,env);
    return json({error:'Recurso não encontrado.'},404);
-  }catch(e){return json({error:e instanceof RequestError?e.message:'Serviço indisponível. O rascunho foi preservado.'},e instanceof RequestError?e.status:503);}
+  }catch(e){return json({error:e instanceof RequestError?e.message:'Serviço indisponível. Tente novamente nesta janela.'},e instanceof RequestError?e.status:503);}
  },
  async scheduled(_controller,env,ctx) {ctx.waitUntil(deliver(env));}
 };

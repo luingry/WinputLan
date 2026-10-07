@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {Miniflare} from 'miniflare';
+import {runInNewContext} from 'node:vm';
 import worker,{acceptReport,deliver,readBody,validateReport} from '../worker.js';
 
 const now=Date.parse('2026-10-06T22:00:00Z');
@@ -19,6 +20,19 @@ test('public routes restrict host, origin and methods and isolate the challenge'
  const page=await worker.fetch(new Request('https://bugs.luingry.com.br/challenge?id='+report().id),env);
  assert.equal(page.headers.get('Cache-Control'),'no-store');assert.ok(page.headers.get('Content-Security-Policy').includes("default-src 'none'"));
  assert.ok(!(await page.text()).includes('diagnostics'));assert.equal((await (await worker.fetch(new Request('https://bugs.luingry.com.br/health'),env)).json()).ready,false);
+});
+test('challenge only appears during manual interaction and refreshes automatically',async()=>{
+ const env={REPORT_HOST:'bugs.luingry.com.br',TURNSTILE_SITEKEY:'public-sitekey'};
+ const id=report().id;
+ const html=await (await worker.fetch(new Request('https://bugs.luingry.com.br/challenge?id='+id),env)).text();
+ const messages=[];let options;
+ const script=html.match(/<script nonce="[a-f0-9]+">([\s\S]*?)<\/script>/)[1];
+ runInNewContext(script+';ready();',{window:{chrome:{webview:{postMessage:v=>messages.push(v)}}},turnstile:{render:(selector,o)=>{assert.equal(selector,'#challenge');options=o;}}});
+ assert.equal(options.appearance,'interaction-only');assert.equal(options['refresh-expired'],'auto');assert.equal(options['refresh-timeout'],'auto');
+ assert.equal(options.cData,id);assert.equal(options.action,'bug_report');assert.equal(messages.length,0);
+ options['before-interactive-callback']();options['after-interactive-callback']();options.callback('test-token');options['expired-callback']();options['error-callback']();options['timeout-callback']();
+ assert.deepEqual(messages.map(v=>v.type),['interactive','noninteractive','token','expired','error','expired']);
+ assert.equal(messages[2].token,'test-token');
 });
 async function setup(){
  const mf=new Miniflare({modules:true,script:'export default {fetch(){return new Response("ok")}}',compatibilityDate:'2026-07-01',d1Databases:{DB:'report-test'}});
@@ -47,6 +61,8 @@ test('D1 commits report and outbox once; uncertain retries work without a new ca
   const changed=structuredClone(r);changed.title='Outro conteúdo';await assert.rejects(()=>acceptReport(request(changed),s.env,verify(r.id),now),e=>e.status===409);
   await deliver(s.env,now);await deliver(s.env,now);assert.equal(s.mail.length,1);
   assert.equal(s.mail[0].to,'verified@example.com');assert.ok(s.mail[0].attachments[0].content.length>0);
+  assert.ok(s.mail[0].html.includes('Mouse travou'));assert.ok(s.mail[0].text.includes(r.description));
+  assert.equal(s.mail[0].attachments[1].contentId,'winputlan-logo');
  }finally{await s.mf.dispose();}
 });
 test('concurrent IP and global quotas are enforced atomically',async()=>{
@@ -66,6 +82,50 @@ test('Turnstile fails closed and a failed outbox transaction leaves no report',a
   await assert.rejects(()=>acceptReport(request(r),s.env,async()=>{throw new Error('offline');},now),e=>e.status===503);
   await s.db.prepare("CREATE TRIGGER break_outbox BEFORE INSERT ON outbox BEGIN SELECT RAISE(ABORT,'test failure'); END;").run();
   await assert.rejects(()=>acceptReport(request(r),s.env,verify(r.id),now));assert.equal((await s.db.prepare('SELECT COUNT(*) AS n FROM reports').first()).n,0);
+ }finally{await s.mf.dispose();}
+});
+test('missing, empty or malformed tokens do not consume verification budgets',async()=>{
+ const s=await setup();try{
+  const r=report();
+  for(const [token,status] of [[null,400],['',403],[123,400],['x'.repeat(2049),400]]) {
+   await assert.rejects(()=>acceptReport(request(r,'192.0.2.1',token),s.env,()=>{throw new Error('must not verify');},now),e=>e.status===status);
+  }
+  const absent=request(r);const body=await absent.json();delete body.token;
+  await assert.rejects(()=>acceptReport(new Request(absent.url,{method:'POST',headers:absent.headers,body:JSON.stringify(body)}),s.env,()=>{throw new Error('must not verify');},now),e=>e.status===400);
+  assert.equal((await s.db.prepare("SELECT COUNT(*) AS n FROM budgets WHERE key LIKE 'verify%'").first()).n,0);
+  assert.equal((await s.db.prepare('SELECT COUNT(*) AS n FROM reports').first()).n,0);
+ }finally{await s.mf.dispose();}
+});
+test('fake tokens are limited per IP per day without starving another IP',async()=>{
+ const s=await setup();try{
+  const r=report();let calls=0;
+  const reject=async()=>{calls++;return Response.json({success:false});};
+  for(let i=0;i<20;i++)await assert.rejects(()=>acceptReport(request(r,'192.0.2.1','fake-token'),s.env,reject,now+Math.floor(i/10)*60000),e=>e.status===403);
+  const later=now+600000;
+  await assert.rejects(()=>acceptReport(request(r,'192.0.2.1','fake-token'),s.env,reject,later),e=>e.status===429);
+  assert.equal(calls,20);
+  assert.equal((await s.db.prepare("SELECT count FROM budgets WHERE key LIKE 'verify-ip:%'").first()).count,20);
+  assert.equal((await s.db.prepare('SELECT count FROM budgets WHERE key=?').bind('verify:'+Math.floor(now/86400000)).first()).count,20);
+  const other=report();assert.equal((await acceptReport(request(other,'192.0.2.2'),s.env,verify(other.id),later)).status,200);
+  const next=report();assert.equal((await acceptReport(request(next,'192.0.2.1'),s.env,verify(next.id),now+86400000)).status,200);
+  assert.equal((await s.db.prepare('SELECT COUNT(*) AS n FROM outbox').first()).n,2);
+ }finally{await s.mf.dispose();}
+});
+test('daily verification limit is atomic and stored retries bypass exhausted budgets',async()=>{
+ const s=await setup();try{
+  const existing=report();await acceptReport(request(existing),s.env,verify(existing.id),now);
+  await s.db.prepare("UPDATE budgets SET count=19 WHERE key LIKE 'verify-ip:%'").run();
+  const r=report();let calls=0;
+  const outcomes=await Promise.allSettled(Array.from({length:8},()=>acceptReport(request(r,'192.0.2.1','fake-token'),s.env,async()=>{calls++;return Response.json({success:false});},now)));
+  assert.equal(calls,1);
+  assert.equal(outcomes.filter(x=>x.status==='rejected'&&x.reason.status===403).length,1);
+  assert.equal(outcomes.filter(x=>x.status==='rejected'&&x.reason.status===429).length,7);
+  assert.equal((await s.db.prepare('SELECT count FROM budgets WHERE key=?').bind('verify:'+Math.floor(now/86400000)).first()).count,2);
+  await s.db.prepare('UPDATE budgets SET count=10000 WHERE key=?').bind('verify:'+Math.floor(now/86400000)).run();
+  const retry=await acceptReport(request(existing,'192.0.2.1',''),s.env,()=>{throw new Error('must not verify stored receipt');},now);
+  assert.equal((await retry.json()).receipt,'WLR-'+existing.id);
+  const other=report();await assert.rejects(()=>acceptReport(request(other,'192.0.2.2'),s.env,verify(other.id),now),e=>e.status===429);
+  assert.equal((await s.db.prepare('SELECT COUNT(*) AS n FROM outbox').first()).n,1);
  }finally{await s.mf.dispose();}
 });
 test('mail failure is durable, concurrent cron leases prevent duplicate notification',async()=>{

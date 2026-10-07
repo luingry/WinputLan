@@ -1,11 +1,36 @@
 # Errors and prevention
 
+## 2026-10-07 - Tentativas sem CAPTCHA consumiam a capacidade global de relatos
+
+- Sintoma reproduzido localmente: requisições com token ausente, vazio ou inválido aumentavam o orçamento diário compartilhado; depois de esgotá-lo, novos relatos de outros IPs recebiam 429 antes de verificar o CAPTCHA.
+- Causa raiz: `verify:<dia>` era debitado antes da validação estrutural do token e não havia limite diário de verificações por IP. As quotas de relatos só atuavam após CAPTCHA válido, permitindo abuso sustentado sem inserir relatos.
+- Solução: validar tipo/tamanho/token vazio antes de debitar verificações e aplicar quota atômica de 20 verificações/IP/dia antes do orçamento global. O HMAC do IP muda diariamente; nenhuma alteração de schema ou secret é necessária. A confirmação de relatos já gravados continua antes dessas restrições.
+- Validação: 13 testes do serviço aprovados no Node 24.19.0, com D1/Miniflare real e CAPTCHA/provedor simulados. Bundle comparado com o editor e publicado no Worker existente como versão ativa `7469d990`, preservando os bindings e secrets.
+- Prevenção: regressões com tokens ausentes/vazios/malformados exigem zero débito; 20 tokens falsos bloqueiam somente aquele IP; concorrência não ultrapassa a quota; outro IP e o dia seguinte continuam aceitos; reenvios já gravados funcionam com ambas as quotas esgotadas. O teto global permanece para limitar recursos; ataques distribuídos continuam sujeitos aos limites da plataforma.
+
+## 2026-10-07 - Logo inline do e-mail chegava como imagem inválida
+
+- Sintoma: o HTML era entregue, mas o Gmail mostrava o texto alternativo e erro de carregamento do logo; a imagem tinha `naturalWidth=0`.
+- Causa raiz: o binding de envio transmitiu a string Base64 como conteúdo textual do anexo PNG. O arquivo recebido tinha 9.260 bytes e começava com `iVBORw0KGgoAAAAN`, em vez da assinatura binária PNG `89504E470D0A1A0A`. A prévia local decodificava essa string, escondendo a diferença do transporte real.
+- Solução: decodificar o asset uma vez para `Uint8Array` e enviar esses bytes no anexo inline, mantendo o mesmo Content-ID. A prévia converte os bytes para data URL somente para o navegador.
+- Validação: a versão ativa `41db7a8a` entregou pelo cron de produção o mesmo protocolo às 10h10 BRT, com PNG de 6.945 bytes; no Gmail a imagem carregou em 128×128, o container mediu 600px e o rodapé foi conferido visualmente.
+- Prevenção: o teste exige conteúdo binário, assinatura PNG e igualdade com o frame do ícone original. Validar o arquivo MIME recebido e a imagem carregada na caixa real; a presença de uma tag `img` ou de um anexo PNG não prova uma imagem válida.
+
+## 2026-10-07 - E-mail do relato continuava sem o template HTML
+
+- Sintoma: o envio pela aplicação chegava à caixa com texto simples e JSON, sem cabeçalho, logo, estrutura visual ou rodapé.
+- Causa raiz: o template estava implementado e validado localmente, mas o Worker de produção continuava com a montagem antiga. O MIME recebido não tinha `text/html`; a comparação do código ativo confirmou que a diferença era somente a integração do template.
+- Solução: publicar o bundle validado no Worker existente, preservando bindings, secrets, destinatário e cron; reprocessar somente o relato afetado, com o mesmo protocolo. A publicação via editor Cloudflare foi usada porque Wrangler não tinha autenticação local.
+- Validação: o cron de produção entregou HTML, alternativa textual, logo inline válido e o diagnóstico original em `WLR-55fcb7905c5249bf8344f1f89a9ffac2`. Os disparos manuais do editor usam uma prévia e não substituem a prova do cron real.
+- Prevenção: distinguir build/dry-run de publicação; mudanças no template exigem atualizar o Worker e conferir o MIME e a renderização na caixa real. Compilar ou instalar o aplicativo não atualiza o serviço de e-mail.
+
 ## 2026-10-06 - Relato Unicode grande impedia o reinício do formulário
 
 - Cenário reproduzido em teste: campos dentro dos limites de caracteres, com 500 eventos e texto Unicode, excediam 96 KiB em UTF-8. O clone de "Novo relato" serializava também esse texto antes de limpá-lo; uma exceção de tamanho poderia escapar do handler.
 - Causa: o snapshot inicial compartilhava o objeto editado, e o conteúdo era congelado antes de validar o tamanho completo da submissão.
 - Solução: validar os bytes antes de congelar e mostrar instrução para reduzir o texto; iniciar um novo relato copiando somente o diagnóstico. Rascunhos recuperados conservam o diagnóstico original; o snapshot da abertura coleta o tipo de rede para novos relatos.
 - Prevenção: regressão com Unicode + 500 eventos exige zero chamadas HTTP para corpo grande e verifica um novo relato com diagnóstico independente, sem copiar o texto excessivo.
+- Atualização 2026-10-07: o formulário não persiste nem recupera rascunhos e não tem mais "Novo relato". Cada abertura cria conteúdo vazio e diagnóstico independente; a validação de bytes antes de congelar e a identidade estável dos reenvios em memória continuam necessárias.
 
 ## 2026-10-06 - WebView2 não abria no aplicativo AnyCPU
 

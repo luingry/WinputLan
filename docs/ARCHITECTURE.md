@@ -41,9 +41,11 @@ active/success/action states. Focus, disabled, hover and pressed states are
 defined in `App.xaml`; the app avoids decorative motion and is safe under a
 reduced-motion system preference.
 
-BugReportWindow captures bounded diagnostic metadata when opened and stores one
-DPAPI-protected draft per user. Its native fields and preview stay outside the
-WebView2 bridge, which only receives the Turnstile challenge token. BugReportClient
+BugReportWindow captures bounded diagnostic metadata when opened and keeps report
+text and retry identity only in memory until the window closes. Diagnostics are
+not displayed. Native fields stay outside the WebView2 bridge, which receives
+Turnstile tokens and interaction state. The challenge is visible only while
+manual interaction is required; transient failures retry automatically. BugReportClient
 posts to the fixed project HTTPS endpoint, with bounded responses and stable retry
 identity. A Cloudflare Worker verifies requests and atomically persists reports
 with a D1 email outbox. A scheduled worker claims pending notifications with leases

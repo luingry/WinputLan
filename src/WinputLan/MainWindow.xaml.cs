@@ -109,7 +109,7 @@ namespace WinputLan
             _isElevated = ProcessElevation.IsCurrentElevated();
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
             _suppressStartupToggle = true; StartWithWindowsCheckBox.IsChecked = _config.StartWithWindows; _suppressStartupToggle = false;
-            VersionText.Text = "v" + InstalledVersion + (_isElevated ? "  ·  Admin" : string.Empty);
+            VersionText.Text = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
             RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);
@@ -953,7 +953,7 @@ namespace WinputLan
         private async Task CheckUpdatesAsync(bool manual)
         {
             if (_updateBusy) return;
-            _updateBusy = true; UpdatesButton.IsEnabled = false; UpdatesButtonText.Text = "Verificando…";
+            _updateBusy = true; UpdatesButton.IsEnabled = false; UpdatesButton.ToolTip = "Verificando…";
             try
             {
                 using (var handler = new HttpClientHandler { AllowAutoRedirect = false })
@@ -972,9 +972,9 @@ namespace WinputLan
                     }
                     var question = "A versão " + manifest.Version + " do Winput LAN está disponível (instalada: " + InstalledVersion + ").\n\nBaixar e instalar agora? O app fecha durante a instalação e reabre sozinho.";
                     if (MessageBox.Show(question, "Atualização disponível", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) { AddLog("github", "local", "Update", "postponed"); return; }
-                    var progress = new Progress<int>(p => UpdatesButtonText.Text = "Baixando " + p + "%");
+                    var progress = new Progress<int>(p => UpdatesButton.ToolTip = "Baixando " + p + "%");
                     var installer = await updater.DownloadAndValidateAsync(manifest, InstalledVersion, Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), progress, CancellationToken.None);
-                    UpdatesButtonText.Text = "Instalando…"; AddLog("github", "local", "Update", "validated");
+                    UpdatesButton.ToolTip = "Instalando…"; AddLog("github", "local", "Update", "validated");
                     // Silent Inno setup; its [Run] section relaunches the app for the signed-in user when it finishes.
                     Process.Start(new ProcessStartInfo(installer, "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS") { UseShellExecute = true });
                     // Exit for real (not to tray) so the setup can replace the locked executable.
@@ -986,7 +986,7 @@ namespace WinputLan
                 AddLog("github", "local", "Update", "error");
                 if (manual) MessageBox.Show("Não foi possível atualizar. Nenhum instalador foi executado.\n\n" + ex.Message, "Atualizações", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            finally { _updateBusy = false; UpdatesButton.IsEnabled = true; if (UpdatesButtonText.Text != "Instalando…") UpdatesButtonText.Text = "Atualizações"; }
+            finally { _updateBusy = false; UpdatesButton.IsEnabled = true; UpdatesButton.ToolTip = "Verificar atualizações"; }
         }
 
         private static string InstalledVersion { get { return typeof(MainWindow).Assembly.GetName().Version.ToString(3); } }

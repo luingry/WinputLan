@@ -21,7 +21,7 @@ namespace WinputLan
             {
                 base.OnStartup(e);
                 var snapshot = BugReportDiagnostics.Capture(WinputConfig.CreateDefault(), new TransactionLogEntry[0], new double[4], false, false, false, "Offline", "Offline", 1, 1);
-                var report = new BugReportWindow(snapshot, Path.Combine(Path.GetTempPath(), "WinputLan-report-smoke"));
+                var report = new BugReportWindow(snapshot);
                 MainWindow = report; report.Show(); return;
             }
             if (e.Args.Length > 0 && string.Equals(e.Args[0], CursorVisibilityGuard.HelperArgument, StringComparison.Ordinal))

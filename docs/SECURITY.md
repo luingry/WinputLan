@@ -29,13 +29,17 @@ metadata and log events use an allowlist; machine names, network addresses,
 pairing secrets and input payloads are excluded. Opening the verification loads
 Cloudflare Turnstile, which receives normal connection and browser information.
 
-Reports use HTTPS, an encrypted local draft and an unpredictable retry secret.
+Reports use HTTPS and an unpredictable retry secret held only in memory.
 The Worker validates Turnstile and binds it to the hostname, action and report ID.
+Missing, empty or malformed tokens are rejected before consuming verification
+budgets. An atomic 20-verifications/IP/day budget precedes the shared daily
+ceiling, including invalid tokens; stored receipt confirmations bypass both.
 Atomic D1 triggers enforce acceptance quotas and commit the report/outbox together;
 retries compare fixed-size secret hashes in constant time and preserve identity.
 Notifications have fixed headers/recipient and a diagnostic JSON attachment.
 Distributed attacks or free-tier limits can still interrupt availability; the app
-preserves unconfirmed drafts. See `BUG_REPORTS_SETUP.md` for limits and retention.
+keeps unconfirmed attempts only until the report window closes.
+See `BUG_REPORTS_SETUP.md` for limits and retention.
 
 ## Firewall and updater
 

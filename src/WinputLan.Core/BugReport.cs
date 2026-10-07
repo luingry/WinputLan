@@ -81,8 +81,8 @@ namespace WinputLan.Core
         {
             if (report == null || report.Schema != 1 || !Regex.IsMatch(report.Id ?? "", "^[a-f0-9]{32}$")) return "Relato inválido.";
             if (string.IsNullOrWhiteSpace(report.Title) || report.Title.Trim().Length < 3 || report.Title.Length > 160) return "Informe um título com 3 a 160 caracteres.";
-            if (string.IsNullOrWhiteSpace(report.Description) || report.Description.Trim().Length < 10 || report.Description.Length > 6000) return "Descreva o problema com pelo menos 10 caracteres.";
-            if (report.Steps == null || report.Steps.Length > 4000) return "Os passos devem ter até 4.000 caracteres.";
+            if (string.IsNullOrWhiteSpace(report.Description) || report.Description.Trim().Length < 10 || report.Description.Length > 1000) return "Descreva o problema com 10 a 1.000 caracteres.";
+            if (report.Steps == null || report.Steps.Length > 1000) return "Os passos devem ter até 1.000 caracteres.";
             return null;
         }
     }

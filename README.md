@@ -23,9 +23,9 @@ Depois da primeira conexão, os PCs se reconhecem: basta clicar na máquina (ou 
 
 O controle de mouse e teclado acontece dentro da sua rede local, sem conta ou serviço de controle na nuvem. Cada conexão segue as suas preferências de aceite.
 
-Ao escolher **Reportar problema**, o aplicativo prepara automaticamente um diagnóstico técnico local. A descrição e o diagnóstico são enviados à infraestrutura Cloudflare do projeto somente ao clicar em **Enviar relato**. O diagnóstico inclui versões, monitores, preferências operacionais e eventos recentes; exclui conteúdo digitado, nomes dos PCs, endereços de rede e segredos de pareamento. Você pode visualizar os detalhes antes de enviar. Relatos ficam armazenados por até 90 dias; o rascunho local é criptografado e expira após 30 dias.
+Ao escolher **Reportar problema**, o aplicativo prepara automaticamente um diagnóstico técnico local, sem exibir esse bloco no formulário. A descrição e o diagnóstico são enviados à infraestrutura Cloudflare do projeto somente ao clicar em **Enviar relato**. O diagnóstico inclui versões, monitores, preferências operacionais e eventos recentes; exclui conteúdo digitado, nomes dos PCs, endereços de rede e segredos de pareamento. Relatos ficam armazenados por até 90 dias. O formulário não salva nem recupera rascunhos; fechar a janela descarta o texto.
 
-O formulário abre dentro do app e usa o Microsoft Edge WebView2 Runtime para a verificação antibot. Se ele estiver ausente, o rascunho continua salvo e a janela informa o requisito.
+O formulário abre dentro do app e usa o Microsoft Edge WebView2 Runtime para a verificação antibot, que aparece somente quando exige interação manual. Se ele estiver ausente, a janela informa o requisito. Falhas temporárias da verificação são repetidas automaticamente enquanto a janela estiver aberta.
 
 ## Atualizações
 

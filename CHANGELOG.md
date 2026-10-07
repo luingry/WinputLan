@@ -5,6 +5,18 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.29] - 2026-10-07
+
+### Changed
+
+- Problem reports start empty on every opening and keep uncertain attempts only in memory while the window is open, without saving or recovering drafts. Description and reproduction steps are limited to 1,000 characters each, with visible counters and automatic close after success.
+- Report notifications use a readable HTML template with the application logo embedded as a binary PNG and the full diagnostic JSON attached.
+
+### Fixed
+
+- Remove the sidebar and use the full dashboard width. Move problem reports and update checks to bug and refresh icons beside the version, and hide the Admin and local network status labels.
+- Reject missing or malformed CAPTCHA tokens before consuming the shared verification budget, and limit verification attempts to 20 per IP per day while preserving confirmations of already accepted reports.
+
 ## [0.3.28] - 2026-10-06
 
 ### Added

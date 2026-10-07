@@ -16,39 +16,41 @@ namespace WinputLan.Loopback
     {
         public static void Run()
         {
-            var root = Path.Combine(Path.GetTempPath(), "WinputLan-report-test-" + Guid.NewGuid().ToString("N"));
-            try {
+            {
                 var config = WinputConfig.CreateDefault(); config.DisplayName = "PRIVATE_MACHINE"; config.RemoteAddress = "192.168.87.91"; config.PinnedSecret = Encoding.UTF8.GetBytes("PRIVATE_SECRET");
                 var log = new InMemoryTransactionLog(); log.Add("PRIVATE_MACHINE", "PRIVATE_IP", "Transport", "failed PRIVATE_SECRET"); log.Add("local","remote","Input.KeyDown","received");
                 var report = BugReportDiagnostics.Capture(config,log.Snapshot(),new double[]{1,2,3,4},false,false,false,"Offline","Offline",1,1);
                 var serialized = Encoding.UTF8.GetString(BugReportJson.Serialize(report));
                 if(serialized.Contains("PRIVATE_") || serialized.Contains("192.168.") || serialized.Contains("PinnedSecret"))throw new Exception("Private values leaked.");
                 report.Title="Teste diagnóstico";report.Description="Problema de teste detalhado.";
-                var draft = BugReportDraft.Create(report); var store = new BugReportDraftStore(root); store.Save(draft);
-                if(Encoding.UTF8.GetString(File.ReadAllBytes(Path.Combine(root,"report-draft.dat"))).Contains(report.Title))throw new Exception("Draft is not encrypted.");
-                var restored = store.Load(); if(restored.Secret!=draft.Secret||restored.Report.Id!=draft.Report.Id)throw new Exception("Draft identity lost.");
-                restored.Frozen=true;store.Save(restored);if(!store.Load().Frozen)throw new Exception("Uncertain send state lost.");
-                var fake = new FakeHttp(draft.Report.Id);
+                var attempt = BugReportAttempt.Create(report);
+                var fake = new FakeHttp(attempt.Report.Id);
                 using(var client=new BugReportClient(fake)) {
-                    var receipt=client.SendAsync(draft,"token",CancellationToken.None).GetAwaiter().GetResult();
+                    var receipt=client.SendAsync(attempt,"token",CancellationToken.None).GetAwaiter().GetResult();
                     if(receipt!="WLR-"+report.Id||fake.Bodies.Count!=2||fake.Bodies[0]!=fake.Bodies[1])throw new Exception("Retries changed report identity/content.");
                 }
                 using(var client=new BugReportClient(new OversizedHttp())) {
-                    try {client.SendAsync(draft,"token",CancellationToken.None).GetAwaiter().GetResult();throw new Exception("Oversized response accepted.");}catch(InvalidOperationException){ }
+                    try {client.SendAsync(attempt,"token",CancellationToken.None).GetAwaiter().GetResult();throw new Exception("Oversized response accepted.");}catch(InvalidOperationException){ }
                 }
+                var boundary = new BugReport { Title = "Teste de limite", Description = new string('d',1000), Steps = new string('s',1000) };
+                if(BugReportJson.Validate(boundary)!=null)throw new Exception("1000-character fields were rejected.");
+                boundary.Description += "d";
+                if(BugReportJson.Validate(boundary)==null)throw new Exception("1001-character description was accepted.");
+                boundary.Description = new string('d',1000); boundary.Steps += "s";
+                if(BugReportJson.Validate(boundary)==null)throw new Exception("1001-character steps were accepted.");
+                // Deliberately exceeds field limits to keep the independent UTF-8 serializer guard covered.
                 var large = new BugReport { Title = "Teste de tamanho", Description = new string('\u4e00',6000), Steps = new string('\u4e00',4000) };
                 large.Diagnostics.Events = Enumerable.Range(0,500).Select(_ => new BugReportEvent { Time=large.CapturedUtc, Origin="remote", Destination="remote", Type="Input.ReleaseAll", Status="code-renewed-trust-cleared" }).ToList();
-                if(BugReportJson.Validate(large)!=null)throw new Exception("UTF-8 fixture is outside the character limits.");
                 try { BugReportJson.Serialize(large);throw new Exception("Oversized restart fixture is too small."); }catch(InvalidOperationException){ }
                 var untouched = new FakeHttp(large.Id);
                 using(var client=new BugReportClient(untouched)) {
-                    try { client.SendAsync(BugReportDraft.Create(large),"token",CancellationToken.None).GetAwaiter().GetResult();throw new Exception("UTF-8 body limit was bypassed."); }catch(InvalidOperationException){ }
+                    try { client.SendAsync(BugReportAttempt.Create(large),"token",CancellationToken.None).GetAwaiter().GetResult();throw new Exception("UTF-8 body limit was bypassed."); }catch(InvalidOperationException){ }
                 }
                 if(untouched.Bodies.Count!=0)throw new Exception("Oversized UTF-8 report reached HTTP.");
                 var fresh = BugReportJson.NewFromSnapshot(large);
                 if(fresh.Id==large.Id || fresh.Title!="" || fresh.Description!="" || fresh.Steps!="" || fresh.Diagnostics.Events.Count!=500 || ReferenceEquals(fresh.Diagnostics,large.Diagnostics))throw new Exception("Oversized draft could not restart with isolated diagnostics.");
-                store.Clear();Console.WriteLine("REPORT PASS: allowlist privacy, DPAPI draft, frozen recovery, identical retry, UTF-8 limits, oversized restart and bounded response");
-            } finally {if(Directory.Exists(root))Directory.Delete(root,true);}
+                Console.WriteLine("REPORT PASS: allowlist privacy, identical in-memory retry, 1000-character field limits, UTF-8 limits, fresh report with isolated diagnostics and bounded response");
+            }
         }
         public static void Runtime()
         {

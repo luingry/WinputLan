@@ -21,15 +21,15 @@ namespace WinputLan.Runtime
         private readonly HttpClient _http;
         public BugReportClient() : this(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false }) { }
         public BugReportClient(HttpMessageHandler handler) { _http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) }; }
-        public async Task<string> SendAsync(BugReportDraft draft, string token, CancellationToken cancellationToken)
+        public async Task<string> SendAsync(BugReportAttempt attempt, string token, CancellationToken cancellationToken)
         {
             using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             {
             timeout.CancelAfter(TimeSpan.FromSeconds(30));
             cancellationToken = timeout.Token;
-            var data = BugReportJson.Serialize(new BugReportSubmission { Report = draft.Report, Secret = draft.Secret, Token = token ?? "" });
+            var data = BugReportJson.Serialize(new BugReportSubmission { Report = attempt.Report, Secret = attempt.Secret, Token = token ?? "" });
             // Retrying after a lost response keeps identity/content unchanged. No background resend loop.
-            for (var attempt = 0; ; attempt++)
+            for (var retry = 0; ; retry++)
             {
                 try {
                     using (var message = new HttpRequestMessage(HttpMethod.Post, new Uri(ServiceUri, "api/reports")))
@@ -44,15 +44,15 @@ namespace WinputLan.Runtime
                                 var buffer = new byte[1024]; int read;
                                 while ((read = await stream.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0) { if (output.Length + read > 4096) throw new InvalidOperationException("Resposta inválida do serviço."); output.Write(buffer, 0, read); }
                                 var result = BugReportJson.Deserialize<BugReportResponse>(output.ToArray());
-                                if (response.IsSuccessStatusCode && result.Accepted && result.Receipt == "WLR-" + draft.Report.Id) return result.Receipt;
-                                if ((int)response.StatusCode == 429) throw new InvalidOperationException("Limite de envios atingido. Seu rascunho foi preservado; tente mais tarde.");
-                                if ((int)response.StatusCode == 403) throw new InvalidOperationException("Refaça a verificação de segurança e tente novamente.");
-                                if ((int)response.StatusCode == 409) throw new InvalidOperationException("O relato já existe com outro conteúdo. Inicie um novo relato.");
-                                throw new InvalidOperationException("Não foi possível confirmar o envio. Seu rascunho foi preservado.");
+                                if (response.IsSuccessStatusCode && result.Accepted && result.Receipt == "WLR-" + attempt.Report.Id) return result.Receipt;
+                                if ((int)response.StatusCode == 429) throw new InvalidOperationException("Limite de envios atingido. Tente mais tarde.");
+                                if ((int)response.StatusCode == 403) throw new InvalidOperationException("Aguarde a verificação de segurança e tente novamente.");
+                                if ((int)response.StatusCode == 409) throw new InvalidOperationException("O relato já existe com outro conteúdo. Feche e reabra esta janela.");
+                                throw new InvalidOperationException("Não foi possível confirmar o envio. Tente novamente nesta janela.");
                             }
                         }
                     }
-                } catch (HttpRequestException) when (attempt == 0) { await Task.Delay(1500, cancellationToken).ConfigureAwait(false); }
+                } catch (HttpRequestException) when (retry == 0) { await Task.Delay(1500, cancellationToken).ConfigureAwait(false); }
             }
             }
         }
