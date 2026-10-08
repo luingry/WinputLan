@@ -38,6 +38,7 @@ namespace WinputLan.Tests
             Run("privacy log", TestPrivacyLog);
             Run("configuration corruption validation", TestConfig);
             Run("signed release manifest invariants", TestManifest);
+            Run("release notes extract one changelog version", TestReleaseNotes);
             Run("reconnect backoff bounds", TestBackoff);
             Run("automatic update schedule", TestUpdateSchedule);
             Run("elevated relaunch policy", TestElevationPolicy);
@@ -568,6 +569,35 @@ namespace WinputLan.Tests
             config.PinnedDeviceId = "not-a-guid";
             config.PinnedFingerprint = "bad";
             Assert(ConfigValidator.Validate(config).Count > 0, "corrupt pin config rejected");
+        }
+
+        private static void TestReleaseNotes()
+        {
+            var log = @"# Changelog
+
+## [1.2.0] - 2026-01-02
+
+### Added
+
+- New `thing`.
+  continued line
+- Second.
+
+### Fixed
+
+- Bug.
+
+## [1.1.0] - 2026-01-01
+
+### Added
+
+- Old.
+";
+            var notes = ReleaseNotes.Parse(log, "1.2.0");
+            Assert(notes.Count == 2 && notes[0].Heading == "Added" && notes[1].Heading == "Fixed", "sections");
+            Assert(notes[0].Items.Count == 2 && notes[0].Items[0] == "New `thing`. continued line", "wrapped bullet joins");
+            Assert(notes[1].Items.Count == 1 && notes[1].Items[0] == "Bug.", "stops at next version");
+            Assert(ReleaseNotes.Parse(log, "1.1").Count == 0 && ReleaseNotes.Parse(log, "9.9.9").Count == 0, "exact version only");
         }
 
         private static void TestManifest()

@@ -26,5 +26,7 @@
     <!-- Embedded so the window and tray icons never depend on the installed folder layout. -->
     <Resource Include="..\..\assets\brand\winput-lan.ico" Link="assets\brand\winput-lan.ico" />
     <Resource Include="..\..\assets\brand\icon-normalized.png" Link="assets\brand\icon-normalized.png" />
+    <!-- Release notes opened from the version label use the same changelog as the GitHub release. -->
+    <EmbeddedResource Include="..\..\CHANGELOG.md" LogicalName="WinputLan.CHANGELOG.md" Link="CHANGELOG.md" />
   </ItemGroup>
 </Project>

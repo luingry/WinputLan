@@ -75,6 +75,7 @@ namespace WinputLan
         private BugReportWindow _reportWindow;
 
         private void ReportBug_Click(object sender, RoutedEventArgs e) { OpenBugReport(); }
+        private void VersionButton_Click(object sender, RoutedEventArgs e) { new ReleaseNotesWindow(InstalledVersion) { Owner = this }.ShowDialog(); }
         private void OpenBugReport()
         {
             if (_reportWindow != null) { WindowActivation.Restore(_reportWindow); return; }
@@ -109,7 +110,7 @@ namespace WinputLan
             _isElevated = ProcessElevation.IsCurrentElevated();
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
             _suppressStartupToggle = true; StartWithWindowsCheckBox.IsChecked = _config.StartWithWindows; _suppressStartupToggle = false;
-            VersionText.Text = "v" + InstalledVersion;
+            VersionButton.Content = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
             LocalHotkeyText.Text = ShortcutTail(_config.LocalHotkey);
             RemoteHotkeyText.Text = ShortcutTail(_config.RemoteHotkey);

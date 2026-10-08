@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.31] - 2026-10-08
+
+### Added
+
+- Clicking the version number opens a compact "Release notes" window with the installed version's changelog entry.
+
 ## [0.3.30] - 2026-10-07
 
 ### Fixed
