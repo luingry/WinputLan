@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.33] - 2026-10-08
+
+### Fixed
+
+- The mouse could still vanish after quick back-and-forth edge switches. While the other PC has control, the local cursor must stay pinned in place; if it is found anywhere else, all motion was silently dropped and the cursor stayed hidden. It is now pinned again within 250 ms (and the mouse hook reinstalled), whether or not the hook was still running.
+
+### Added
+
+- Diagnostics in the log: `Hooks cursor-repinned` / `Hooks mouse-reinstalled` with the offset found, and `Focus on` / `Focus off` on the controlled PC.
+
 ## [0.3.32] - 2026-10-08
 
 ### Fixed

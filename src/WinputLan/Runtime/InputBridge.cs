@@ -87,10 +87,10 @@ namespace WinputLan.Runtime
         private const int HookWatchMs = 250;
         private int _mouseCallbacks;
         private int _watchCallbacks;
-        private NativeMethods.POINT _watchPoint;
+        private int _oversizedMoves;
 
-        // Raised on the hook thread when the watchdog had to reinstall the mouse hook; must not block.
-        public event Action MouseHookRecovered;
+        // Raised on the hook thread when the watchdog had to re-pin the cursor or reinstall the mouse hook, with details; must not block.
+        public event Action<string> MouseHookRecovered;
 
         // edgeReached runs on the hook thread with the fraction along this PC's edge; it must not block.
         public LowLevelInputCapture(IInputSink sink, IHotkeyChordDetector hotkeyChordDetector = null, Func<HotkeyAction, bool> hotkeyAction = null, Action<int> edgeReached = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyChordDetector = hotkeyChordDetector; _hotkeyAction = hotkeyAction; _edgeReached = edgeReached; }
@@ -241,12 +241,14 @@ namespace WinputLan.Runtime
         }
 
         // While control is remote every physical move goes through the hook and is swallowed, so the cursor stays
-        // on the anchor. If it moves with no hook call in between, the mouse hook is gone (Windows removes a hook
-        // that times out, without notice) or something else moved the cursor: reinstall the hook and re-pin.
+        // on the anchor and each hook position is anchor + motion. A cursor found anywhere else breaks that: with
+        // no hook call since the last check the mouse hook is gone (Windows removes a hook that times out, without
+        // notice); otherwise something moved the cursor, and every delta is off by that distance (beyond
+        // MaxDeltaPerEvent all motion is dropped). Either way: reinstall the hook and pin the cursor again.
         private void ArmHookWatch()
         {
-            _watchPoint = _anchor;
             _watchCallbacks = _mouseCallbacks;
+            _oversizedMoves = 0;
         }
 
         private void CheckMouseHook()
@@ -254,16 +256,16 @@ namespace WinputLan.Runtime
             if (!_routing.RemoteActive) return;
             NativeMethods.POINT now;
             if (!NativeMethods.GetCursorPos(out now)) return;
-            var moved = now.X != _watchPoint.X || now.Y != _watchPoint.Y;
             var seen = _mouseCallbacks != _watchCallbacks;
-            _watchPoint = now;
-            _watchCallbacks = _mouseCallbacks;
-            if (!moved || seen || (now.X == _anchor.X && now.Y == _anchor.Y)) return;
-            RaiseMouseHook();
-            NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
+            var oversized = _oversizedMoves;
             ArmHookWatch();
+            if (now.X == _anchor.X && now.Y == _anchor.Y) return;
+            // Hook positions still computed from where the cursor was count as motion from there.
+            BeginSettle(now);
+            NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
+            RaiseMouseHook();
             var recovered = MouseHookRecovered;
-            if (recovered != null) try { recovered(); } catch { }
+            if (recovered != null) try { recovered((seen ? "cursor-repinned" : "mouse-reinstalled") + " off=" + (now.X - _anchor.X) + "," + (now.Y - _anchor.Y) + " dropped=" + oversized); } catch { }
         }
 
         private void BeginSettle(NativeMethods.POINT origin)
@@ -431,7 +433,7 @@ namespace WinputLan.Runtime
                         if (!remote) return TryLeaveThroughEdge(data.Point) ? (IntPtr)1 : NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
                         var dx = data.Point.X - _anchor.X;
                         var dy = data.Point.Y - _anchor.Y;
-                        if ((dx == 0 && dy == 0) || Math.Abs(dx) > MaxDeltaPerEvent || Math.Abs(dy) > MaxDeltaPerEvent) return (IntPtr)1;
+                        if ((dx == 0 && dy == 0) || Math.Abs(dx) > MaxDeltaPerEvent || Math.Abs(dy) > MaxDeltaPerEvent) { if (dx != 0 || dy != 0) _oversizedMoves++; return (IntPtr)1; }
                         if (_sink.Publish(InputEvent.MouseDelta(dx, dy, now))) return (IntPtr)1;
                         return NativeMethods.CallNextHookEx(IntPtr.Zero, code, wParam, lParam);
                     }

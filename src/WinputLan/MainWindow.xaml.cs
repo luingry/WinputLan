@@ -156,7 +156,7 @@ namespace WinputLan
                 _inputRouter.InputAudited += AuditInput;
                 _inputRouter.EdgeReached += fraction => Dispatcher.BeginInvoke(new Action(() => { if (_remoteActive && EdgeSwitchActive) SetInputTarget(false, fraction); }));
                 _listenerInputReceiver.InputAudited += AuditInput;
-                _listenerInputReceiver.FocusChanged += focused => Dispatcher.BeginInvoke(new Action(() => { _inboundFocused = focused; RenderMachines(); }));
+                _listenerInputReceiver.FocusChanged += focused => { AddLog("remote", "local", "Focus", focused ? "on" : "off"); Dispatcher.BeginInvoke(new Action(() => { _inboundFocused = focused; RenderMachines(); })); };
                 _listenerInputReceiver.ControllerEdgeSwitchingChanged += on => Dispatcher.BeginInvoke(new Action(() => { _edgeLockedByController = on; RenderEdgeSettings(); AddLog("remote", "local", "Edge", on ? "locked-by-controller" : "unlocked"); }));
                 _listenerInputReceiver.EdgeActivity += (kind, fraction) => AddLog("remote", "local", "Edge", kind + " " + EdgePercent(fraction));
                 _listenerTransport.StateChanged += ListenerTransport_StateChanged;
@@ -803,7 +803,7 @@ namespace WinputLan
                 return true;
             }, fraction => Dispatcher.BeginInvoke(new Action(() => SetInputTarget(true, fraction))));
             _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
-            _capture.MouseHookRecovered += () => AddLog("local", "local", "Hooks", "mouse-reinstalled");
+            _capture.MouseHookRecovered += detail => AddLog("local", "local", "Hooks", detail);
             _capture.Start();
             AddLog("local", "remote", "Hooks", "controller-active");
         }
