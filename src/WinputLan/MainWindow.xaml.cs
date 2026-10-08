@@ -803,6 +803,7 @@ namespace WinputLan
                 return true;
             }, fraction => Dispatcher.BeginInvoke(new Action(() => SetInputTarget(true, fraction))));
             _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
+            _capture.MouseHookRecovered += () => AddLog("local", "local", "Hooks", "mouse-reinstalled");
             _capture.Start();
             AddLog("local", "remote", "Hooks", "controller-active");
         }

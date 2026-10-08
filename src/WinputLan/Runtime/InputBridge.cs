@@ -75,7 +75,6 @@ namespace WinputLan.Runtime
         private readonly Action<int> _edgeReached;
         private volatile ScreenEdge _portalEdge;
         private bool _edgeArmed;
-        private int _edgeSinceTick;
         private PixelRect _primary;
         private int _primaryTick;
         // Right after a switch moved the cursor: where it was before, for hook positions computed from there.
@@ -83,6 +82,15 @@ namespace WinputLan.Runtime
         private int _settleUntilTick;
         private bool _settling;
         private const int PrimaryRefreshMs = 2000;
+        // Mouse hook watchdog (hook thread only): callbacks counted and the cursor position at the last check.
+        private const int WmTimer = 0x0113;
+        private const int HookWatchMs = 250;
+        private int _mouseCallbacks;
+        private int _watchCallbacks;
+        private NativeMethods.POINT _watchPoint;
+
+        // Raised on the hook thread when the watchdog had to reinstall the mouse hook; must not block.
+        public event Action MouseHookRecovered;
 
         // edgeReached runs on the hook thread with the fraction along this PC's edge; it must not block.
         public LowLevelInputCapture(IInputSink sink, IHotkeyChordDetector hotkeyChordDetector = null, Func<HotkeyAction, bool> hotkeyAction = null, Action<int> edgeReached = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyChordDetector = hotkeyChordDetector; _hotkeyAction = hotkeyAction; _edgeReached = edgeReached; }
@@ -141,13 +149,17 @@ namespace WinputLan.Runtime
             // Callbacks only run once this thread pumps, so the seed cannot interleave with them.
             if (_keyboardHook != IntPtr.Zero) SeedHeldKeys();
             started.Set();
+            var watchTimer = UIntPtr.Zero;
             try
             {
                 if (_keyboardHook == IntPtr.Zero || _mouseHook == IntPtr.Zero) return;
+                // A thread timer: WM_TIMER arrives in this loop with no window.
+                watchTimer = NativeMethods.SetTimer(IntPtr.Zero, UIntPtr.Zero, HookWatchMs, IntPtr.Zero);
                 NativeMethods.MSG msg;
                 while (NativeMethods.GetMessage(out msg, IntPtr.Zero, 0, 0) > 0)
                 {
                     if (msg.Message == WmApplyRemote) { ApplyRemote(msg.WParam != IntPtr.Zero, true, msg.LParam.ToInt32()); continue; }
+                    if (msg.Message == WmTimer && msg.Hwnd == IntPtr.Zero) { CheckMouseHook(); continue; }
                     NativeMethods.TranslateMessage(ref msg);
                     NativeMethods.DispatchMessage(ref msg);
                 }
@@ -155,6 +167,7 @@ namespace WinputLan.Runtime
             finally
             {
                 // The loop no longer pumps, so injected keys would stall on our own hook: nothing is handed back.
+                if (watchTimer != UIntPtr.Zero) NativeMethods.KillTimer(IntPtr.Zero, watchTimer);
                 ApplyRemote(false, false);
                 _cursorVisibility.Stop();
                 if (_keyboardHook != IntPtr.Zero) NativeMethods.UnhookWindowsHookEx(_keyboardHook);
@@ -193,14 +206,10 @@ namespace WinputLan.Runtime
             if (active == _routing.RemoteActive) return;
             // Any switch disarms the edge until the cursor is seen off it.
             _edgeArmed = false;
-            _edgeSinceTick = Environment.TickCount;
             var edge = _portalEdge;
             var primary = EdgePortal.IsValid(edge) && edgeArgument > 0 ? PrimaryMonitor() : default(PixelRect);
             if (active)
             {
-                // Windows calls the most recently installed low-level hook first. Another wheel hook installed
-                // after ours (e.g. SmoothMice) would consume the wheel locally, so move ours back to the front.
-                RaiseMouseHook();
                 // Pin the local cursor where it is: every hook position is then anchor + motion.
                 NativeMethods.GetCursorPos(out _restore);
                 BeginSettle(_restore);
@@ -208,6 +217,12 @@ namespace WinputLan.Runtime
                 if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, EdgePortal.FractionAt(edge, primary, _restore.X, _restore.Y), EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
                 _anchor = AnchorFor(_restore);
                 NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
+                // Windows calls the most recently installed low-level hook first. Another wheel hook installed
+                // after ours (e.g. SmoothMice) would consume the wheel locally, so move ours back to the front.
+                // After SetCursorPos: with the mouse moving (edge switch) a move can wait on this busy thread past
+                // the hook timeout, and Windows then silently drops the hook. A fresh one is installed either way.
+                RaiseMouseHook();
+                ArmHookWatch();
                 HandOverModifiers(_routing.SetRemoteActive(true), true);
                 _cursorVisibility.Set(false);
             }
@@ -220,7 +235,35 @@ namespace WinputLan.Runtime
                 if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, edgeArgument - 1, EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
                 BeginSettle(_anchor);
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
+                // Same timeout risk as above; a dropped hook here would silently end edge switching.
+                RaiseMouseHook();
             }
+        }
+
+        // While control is remote every physical move goes through the hook and is swallowed, so the cursor stays
+        // on the anchor. If it moves with no hook call in between, the mouse hook is gone (Windows removes a hook
+        // that times out, without notice) or something else moved the cursor: reinstall the hook and re-pin.
+        private void ArmHookWatch()
+        {
+            _watchPoint = _anchor;
+            _watchCallbacks = _mouseCallbacks;
+        }
+
+        private void CheckMouseHook()
+        {
+            if (!_routing.RemoteActive) return;
+            NativeMethods.POINT now;
+            if (!NativeMethods.GetCursorPos(out now)) return;
+            var moved = now.X != _watchPoint.X || now.Y != _watchPoint.Y;
+            var seen = _mouseCallbacks != _watchCallbacks;
+            _watchPoint = now;
+            _watchCallbacks = _mouseCallbacks;
+            if (!moved || seen || (now.X == _anchor.X && now.Y == _anchor.Y)) return;
+            RaiseMouseHook();
+            NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
+            ArmHookWatch();
+            var recovered = MouseHookRecovered;
+            if (recovered != null) try { recovered(); } catch { }
         }
 
         private void BeginSettle(NativeMethods.POINT origin)
@@ -268,7 +311,7 @@ namespace WinputLan.Runtime
             if (!EdgePortal.IsValid(edge) || _edgeReached == null) return false;
             var primary = PrimaryMonitor();
             if (!EdgePortal.Touches(edge, primary, point.X, point.Y)) { _edgeArmed = true; return false; }
-            if (!_edgeArmed || unchecked(Environment.TickCount - _edgeSinceTick) < EdgePortal.CooldownMs || _routing.AnyLocalButtonDown) return false;
+            if (!_edgeArmed || _routing.AnyLocalButtonDown) return false;
             // The hook runs before the cursor moves, so this is where the motion started.
             NativeMethods.POINT previous;
             if (!NativeMethods.GetCursorPos(out previous) || !primary.Contains(previous.X, previous.Y)) return false;
@@ -373,6 +416,7 @@ namespace WinputLan.Runtime
 
         private IntPtr MouseCallback(int code, IntPtr wParam, IntPtr lParam)
         {
+            _mouseCallbacks++;
             if (code >= 0 && lParam != IntPtr.Zero)
             {
                 var data = (NativeMethods.MouseLlHookStruct)Marshal.PtrToStructure(lParam, typeof(NativeMethods.MouseLlHookStruct));
@@ -493,7 +537,6 @@ namespace WinputLan.Runtime
         // Edge switching: a touch counts only once the cursor has been off the edge since it was armed or placed.
         private ScreenEdge _portalEdge;
         private bool _edgeArmed;
-        private int _edgeSinceTick;
         private int _edgeTouch = -1;
 
         public bool Publish(InputEvent value)
@@ -547,7 +590,7 @@ namespace WinputLan.Runtime
                         var clipRect = NativeMethods.GetClipCursor(out clip) ? new PixelRect(clip.Left, clip.Top, clip.Right, clip.Bottom) : default(PixelRect);
                         var monitors = Monitors(tick, left, top, width, height);
                         CursorBounds.Clamp(ref _cursorX, ref _cursorY, clipRect, monitors);
-                        if (EdgePortal.IsValid(_portalEdge)) DetectEdgeTouch(tick, previousX, previousY, clipRect, new PixelRect(left, top, left + width, top + height), monitors);
+                        if (EdgePortal.IsValid(_portalEdge)) DetectEdgeTouch(previousX, previousY, clipRect, new PixelRect(left, top, left + width, top + height), monitors);
                         dx = PointerCoordinates.ToAbsolute(_cursorX, left, width);
                         dy = PointerCoordinates.ToAbsolute(_cursorY, top, height);
                     }
@@ -598,7 +641,7 @@ namespace WinputLan.Runtime
 
         public void SetPortalEdge(ScreenEdge edge)
         {
-            lock (_gate) { _portalEdge = edge; _edgeArmed = false; _edgeTouch = -1; _edgeSinceTick = Environment.TickCount; }
+            lock (_gate) { _portalEdge = edge; _edgeArmed = false; _edgeTouch = -1; }
         }
 
         // Moves the cursor just inside the edge of the primary monitor, where the controller's cursor left its own.
@@ -621,7 +664,7 @@ namespace WinputLan.Runtime
                     int x, y;
                     EdgePortal.PointAt(edge, primary, fraction, EdgePortal.SpawnInset, out x, out y);
                     _cursorX = x; _cursorY = y; _hasCursor = true; _lastDeltaTick = tick;
-                    _edgeArmed = false; _edgeTouch = -1; _edgeSinceTick = tick;
+                    _edgeArmed = false; _edgeTouch = -1;
                     input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = PointerCoordinates.ToAbsolute(x, left, width), Dy = PointerCoordinates.ToAbsolute(y, top, height), Flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk, ExtraInfo = new IntPtr(_tag) };
                 }
                 return NativeMethods.SendInput(1, new[] { input }, Marshal.SizeOf(typeof(NativeMethods.INPUT))) == 1;
@@ -641,11 +684,11 @@ namespace WinputLan.Runtime
         }
 
         // Called under _gate after the tracked cursor has moved from (previousX, previousY) and been clamped.
-        private void DetectEdgeTouch(int tick, int previousX, int previousY, PixelRect clip, PixelRect screen, List<PixelRect> monitors)
+        private void DetectEdgeTouch(int previousX, int previousY, PixelRect clip, PixelRect screen, List<PixelRect> monitors)
         {
             var primary = EdgePortal.Primary(monitors);
             if (!EdgePortal.Touches(_portalEdge, primary, _cursorX, _cursorY)) { _edgeArmed = true; return; }
-            if (!_edgeArmed || !primary.Contains(previousX, previousY) || _pressedButtons.Count != 0 || EdgePortal.IsConfined(clip, screen) || unchecked(tick - _edgeSinceTick) < EdgePortal.CooldownMs) return;
+            if (!_edgeArmed || !primary.Contains(previousX, previousY) || _pressedButtons.Count != 0 || EdgePortal.IsConfined(clip, screen)) return;
             _edgeArmed = false;
             _edgeTouch = EdgePortal.FractionAt(_portalEdge, primary, _cursorX, _cursorY);
             // Motion that crossed into a monitor beyond the edge stays on the primary, where control will return.
@@ -749,6 +792,8 @@ namespace WinputLan.Runtime
         [DllImport("user32.dll")] internal static extern int GetMessage(out MSG msg, IntPtr hWnd, uint filterMin, uint filterMax);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool TranslateMessage(ref MSG msg);
         [DllImport("user32.dll")] internal static extern IntPtr DispatchMessage(ref MSG msg);
+        [DllImport("user32.dll", SetLastError = true)] internal static extern UIntPtr SetTimer(IntPtr hWnd, UIntPtr id, uint elapse, IntPtr timerProc);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool KillTimer(IntPtr hWnd, UIntPtr id);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] internal static extern bool PostThreadMessage(uint threadId, int msg, IntPtr wParam, IntPtr lParam);
 
         internal const uint MonitorDefaultToPrimary = 1;

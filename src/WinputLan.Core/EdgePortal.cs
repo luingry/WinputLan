@@ -20,8 +20,6 @@ namespace WinputLan.Core
         public const int MaxFraction = 65535;
         // The arriving cursor lands this far inside the edge, so arriving never counts as touching it.
         public const int SpawnInset = 2;
-        // No edge switch this soon after control arrived; a cursor jittering on the edge must not ping-pong.
-        public const int CooldownMs = 250;
         public const int PortalPayloadBytes = 4;
         public const int ReachedPayloadBytes = 2;
 

@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.32] - 2026-10-08
+
+### Fixed
+
+- The mouse no longer disappears after switching to the controlled PC through the screen edge. Windows could silently drop the mouse hook while the cursor was moving during the switch, leaving the local cursor hidden while the mouse went nowhere. The hook is now reinstalled after every switch, and a watchdog reinstalls it whenever the pinned cursor moves without the hook seeing it.
+
+### Changed
+
+- Edge switching no longer waits 250 ms after each switch, so control can go back and forth right away. The cursor only has to leave the edge once before the next switch.
+
 ## [0.3.31] - 2026-10-08
 
 ### Added

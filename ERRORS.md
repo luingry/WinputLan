@@ -60,6 +60,13 @@
 - Solução: mutex por usuário/sessão antes de configurações, elevação, hooks ou rede; evento de ativação restaura a janela existente em aberturas manuais. Objetos têm ACL do usuário e integridade média para funcionar entre processos normais/elevados. O relançamento elevado aguarda o processo anterior sair; o auxiliar do cursor continua fora dessa proteção.
 - Prevenção: testes em processos isolados cobrem aberturas simultâneas, ativação, recuperação após queda e transferência entre processos. `WinputLan.Loopback.exe --instance-ui-test` também verifica a restauração de janelas WPF ocultas/minimizadas no desktop interativo, fora dos requisitos de foco do CI. Nunca usar o teste para iniciar hooks ou interferir na sessão remota do usuário.
 
+## 2026-10-08 - Cursor some ao trocar para o PC 2 pela borda; mouse não chega ao PC 2
+
+- Sintoma: após trocar pela borda, nenhum cursor visível e o mouse não controlava o PC 2; o teclado seguia indo para o PC 2. O atalho do PC 2 não fazia nada (já estava remoto); só o atalho do PC 1 devolvia o cursor.
+- Causa raiz (dedução, sem reprodução ao vivo): o Windows remove em silêncio um hook de baixo nível que estoura o `LowLevelHooksTimeout`. Na troca pela borda o mouse está em movimento, e `ApplyRemote` (com `SetCursorPos`) roda na thread do hook enquanto um movimento espera por ela. Sem o hook de mouse, o movimento passava localmente com o cursor oculto e nada ia para o PC 2. A próxima ida ao remoto reinstalava o hook (`RaiseMouseHook`), por isso a troca "consertava".
+- Solução: `RaiseMouseHook` agora roda depois do `SetCursorPos`, nas duas direções. Watchdog na thread do hook (`SetTimer` de 250 ms): no modo remoto, se o cursor saiu do lugar sem nenhuma chamada do hook de mouse, reinstala o hook e prende o cursor de novo na âncora; registra `Hooks mouse-reinstalled` no log.
+- Prevenção: nunca supor que um hook de baixo nível continua instalado; trabalho síncrono na thread do hook com o mouse em movimento pode derrubá-lo.
+
 ## 2026-10-07 - Teclas do atalho presas no pareamento inicial / primeira troca após ligar o PC
 
 - Sintoma: na primeira troca após ligar o PC (ou logo após parear), uma ou mais teclas do atalho (Ctrl/Shift/Alt/N) ficavam pressionadas no PC controlador até serem apertadas de novo. Trocas seguintes funcionavam.
