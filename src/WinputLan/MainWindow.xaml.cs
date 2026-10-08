@@ -76,6 +76,17 @@ namespace WinputLan
 
         private void ReportBug_Click(object sender, RoutedEventArgs e) { OpenBugReport(); }
         private void VersionButton_Click(object sender, RoutedEventArgs e) { new ReleaseNotesWindow(InstalledVersion) { Owner = this }.ShowDialog(); }
+        private void ShowUpdatedReleaseNotes()
+        {
+            // Recorded first so a crash while the notes are open does not show them on every start.
+            RememberSeenVersion();
+            new ReleaseNotesWindow(InstalledVersion) { Owner = this }.ShowDialog();
+        }
+        private void RememberSeenVersion()
+        {
+            _config.LastSeenVersion = InstalledVersion;
+            try { _configStore?.Save(_config); } catch { }
+        }
         private void OpenBugReport()
         {
             if (_reportWindow != null) { WindowActivation.Restore(_reportWindow); return; }
@@ -97,6 +108,10 @@ namespace WinputLan
             ContentRendered += (sender, args) => FitHeightToContent();
             _backgroundLifecycle = new BackgroundLifecycle(_config.ContinueInBackground);
             _configStore = configStore;
+            // After an update, the first time the window opens (also when started in the tray) shows the new version's notes.
+            if (ReleaseNotes.ShouldShowAfterUpdate(_config.LastSeenVersion, InstalledVersion, configStore != null && configStore.CreatedNew))
+                ContentRendered += (sender, args) => Dispatcher.BeginInvoke(new Action(ShowUpdatedReleaseNotes), DispatcherPriority.ApplicationIdle);
+            else if (_config.LastSeenVersion != InstalledVersion) RememberSeenVersion();
             LocalNameText.Text = _config.DisplayName;
             LocalAddressText.Text = Environment.MachineName + "  |  TCP " + _config.ListenPort;
             LocalIpText.Text = "IP: " + LocalIPv4Address();
@@ -972,8 +987,7 @@ namespace WinputLan
                         if (manual) MessageBox.Show("Você já está na versão mais recente (" + InstalledVersion + ").", "Atualizações", MessageBoxButton.OK, MessageBoxImage.Information);
                         return;
                     }
-                    var question = "A versão " + manifest.Version + " do Winput LAN está disponível (instalada: " + InstalledVersion + ").\n\nBaixar e instalar agora? O app fecha durante a instalação e reabre sozinho.";
-                    if (MessageBox.Show(question, "Atualização disponível", MessageBoxButton.YesNo, MessageBoxImage.Information) != MessageBoxResult.Yes) { AddLog("github", "local", "Update", "postponed"); return; }
+                    if (!AskToInstallUpdate(manifest.Version)) { AddLog("github", "local", "Update", "postponed"); return; }
                     var progress = new Progress<int>(p => UpdatesButton.ToolTip = "Baixando " + p + "%");
                     var installer = await updater.DownloadAndValidateAsync(manifest, InstalledVersion, Path.Combine(Path.GetTempPath(), "WinputLan", "updates"), progress, CancellationToken.None);
                     UpdatesButton.ToolTip = "Instalando…"; AddLog("github", "local", "Update", "validated");
@@ -989,6 +1003,21 @@ namespace WinputLan
                 if (manual) MessageBox.Show("Não foi possível atualizar. Nenhum instalador foi executado.\n\n" + ex.Message, "Atualizações", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
             finally { _updateBusy = false; UpdatesButton.IsEnabled = true; UpdatesButton.ToolTip = "Verificar atualizações"; }
+        }
+
+        private bool AskToInstallUpdate(string version)
+        {
+            var prompt = new UpdateAvailableWindow(version, InstalledVersion);
+            if (IsVisible && WindowState != WindowState.Minimized) prompt.Owner = this;
+            else
+            {
+                // Automatic checks also run while the app lives in the tray: show the prompt on its own, in front.
+                prompt.WindowStartupLocation = WindowStartupLocation.CenterScreen;
+                prompt.ShowInTaskbar = true;
+                prompt.Topmost = true;
+                prompt.Icon = Icon;
+            }
+            return prompt.ShowDialog() == true;
         }
 
         private static string InstalledVersion { get { return typeof(MainWindow).Assembly.GetName().Version.ToString(3); } }

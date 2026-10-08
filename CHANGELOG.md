@@ -5,6 +5,16 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.3.34] - 2026-10-08
+
+### Adicionado
+
+- Ao abrir pela primeira vez uma versão nova, o Winput LAN mostra as notas da versão automaticamente.
+
+### Alterado
+
+- O aviso de atualização disponível agora usa uma janela no mesmo estilo do app, mostrando a versão instalada e a nova, com os botões **Sim** e **Não**.
+
 ## [0.3.33] - 2026-10-08
 
 ### Fixed

@@ -18,6 +18,8 @@ namespace WinputLan.Runtime
         }
 
         public string Path { get { return _path; } }
+        // Set when LoadOrCreate found no usable config file and wrote the defaults.
+        public bool CreatedNew { get; private set; }
 
         public WinputConfig LoadOrCreate()
         {
@@ -30,6 +32,7 @@ namespace WinputLan.Runtime
                 }
             }
             catch { /* corrupt config fails safe to defaults */ }
+            CreatedNew = true;
             var fallback = WinputConfig.CreateDefault();
             Save(fallback);
             return fallback;

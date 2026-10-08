@@ -598,6 +598,10 @@ namespace WinputLan.Tests
             Assert(notes[0].Items.Count == 2 && notes[0].Items[0] == "New `thing`. continued line", "wrapped bullet joins");
             Assert(notes[1].Items.Count == 1 && notes[1].Items[0] == "Bug.", "stops at next version");
             Assert(ReleaseNotes.Parse(log, "1.1").Count == 0 && ReleaseNotes.Parse(log, "9.9.9").Count == 0, "exact version only");
+            Assert(ReleaseNotes.ShouldShowAfterUpdate("1.1.0", "1.2.0", false), "newer version shows notes");
+            Assert(ReleaseNotes.ShouldShowAfterUpdate(null, "1.2.0", false), "config from before the marker shows notes");
+            Assert(!ReleaseNotes.ShouldShowAfterUpdate(null, "1.2.0", true), "fresh install skips notes");
+            Assert(!ReleaseNotes.ShouldShowAfterUpdate("1.2.0", "1.2.0", false) && !ReleaseNotes.ShouldShowAfterUpdate("1.3.0", "1.2.0", false), "same or older version skips notes");
         }
 
         private static void TestManifest()

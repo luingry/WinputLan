@@ -36,6 +36,8 @@ namespace WinputLan.Core
         [DataMember(Order = 20)] public bool EdgeSwitchEnabled { get; set; }
         [DataMember(Order = 21)] public ScreenEdge LocalEdge { get; set; }
         [DataMember(Order = 22)] public ScreenEdge RemoteEdge { get; set; }
+        // Last version that ran; a newer installed version opens its release notes once. Missing in older config files.
+        [DataMember(Order = 23)] public string LastSeenVersion { get; set; }
 
         public static WinputConfig CreateDefault()
         {

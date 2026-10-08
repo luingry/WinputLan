@@ -35,5 +35,15 @@ namespace WinputLan.Core
             sections.RemoveAll(s => s.Items.Count == 0);
             return sections;
         }
+
+        // True on the first run of a version newer than the last one that ran. A brand-new install
+        // (fresh config) skips it; an existing config without a recorded version predates this marker.
+        public static bool ShouldShowAfterUpdate(string lastSeenVersion, string installedVersion, bool freshConfig)
+        {
+            Version installed, last;
+            if (freshConfig || !Version.TryParse(installedVersion, out installed)) return false;
+            if (string.IsNullOrWhiteSpace(lastSeenVersion) || !Version.TryParse(lastSeenVersion, out last)) return true;
+            return installed > last;
+        }
     }
 }

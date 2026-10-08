@@ -1,0 +1,23 @@
+<Window x:Class="WinputLan.UpdateAvailableWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:controls="clr-namespace:WinputLan.Controls" Title="Atualização disponível" Width="420" SizeToContent="Height" WindowStyle="None" ResizeMode="NoResize" ShowInTaskbar="False" SnapsToDevicePixels="True" WindowStartupLocation="CenterOwner" Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}" FontFamily="Segoe UI">
+ <!-- Same chrome as the release notes window. -->
+ <Grid><Grid.RowDefinitions><RowDefinition Height="54"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <Grid Background="{StaticResource ChromeBrush}" MouseLeftButtonDown="Chrome_MouseLeftButtonDown">
+   <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="20,0,0,0"><Image Source="/WinputLan;component/assets/brand/icon-normalized.png" Width="24" Height="24" Margin="0,0,10,0"/><TextBlock Text="Atualização disponível" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"/></StackPanel>
+   <Button Grid.Column="1" Style="{StaticResource CloseChromeButton}" Click="No_Click" AutomationProperties.Name="Fechar janela"><controls:Icon Data="{StaticResource Icon.X}" Width="16" Height="16" StrokeThickness="1.5"/></Button>
+  </Grid>
+  <StackPanel Grid.Row="1" Margin="22,18,22,0">
+   <TextBlock Text="Nova versão disponível" Style="{StaticResource Text.CardTitle}"/>
+   <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+    <Border Style="{StaticResource Keycap}"><TextBlock x:Name="InstalledVersionText" Text="v0.0.0"/></Border>
+    <controls:Icon Data="{StaticResource Icon.ArrowRight}" Width="16" Height="16" StrokeThickness="1.75" Foreground="{StaticResource MutedBrush}" Margin="10,0" VerticalAlignment="Center"/>
+    <Border Style="{StaticResource Keycap}" BorderBrush="{StaticResource AccentBrush}"><TextBlock x:Name="NewVersionText" Text="v0.0.0" Foreground="{StaticResource AccentStrongBrush}"/></Border>
+   </StackPanel>
+   <TextBlock x:Name="MessageText" Style="{StaticResource Text.Secondary}" TextWrapping="Wrap" LineHeight="19" Margin="0,14,0,0"/>
+  </StackPanel>
+  <Grid Grid.Row="2" Margin="22,20,22,20"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+   <Button Grid.Column="1" Content="Não" Style="{StaticResource TextActionButton}" IsCancel="True" Margin="0,0,12,0" AutomationProperties.Name="Não atualizar agora"/>
+   <Button x:Name="YesButton" Grid.Column="2" Content="Sim" Style="{StaticResource PrimaryWideButton}" MinWidth="96" IsDefault="True" Click="Yes_Click" AutomationProperties.Name="Baixar e instalar a atualização"/>
+  </Grid>
+ </Grid>
+</Window>
