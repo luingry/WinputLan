@@ -97,6 +97,28 @@ namespace WinputLan.Runtime
             catch (Win32Exception) { } // The mutex still decides whether startup is allowed.
         }
 
+        // Named event this user can open and signal from both medium and elevated processes
+        // (an elevated creator's default DACL and High label would lock a normal-integrity process out).
+        public static EventWaitHandle CreateUserEvent(string name, bool manualReset)
+        {
+            var sid = WindowsIdentity.GetCurrent().User.Value;
+            IntPtr descriptor;
+            uint descriptorSize;
+            if (!ConvertStringSecurityDescriptorToSecurityDescriptor("D:(A;;GA;;;" + sid + ")S:(ML;;NW;;;ME)", 1, out descriptor, out descriptorSize))
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            try
+            {
+                var security = new SecurityAttributes { Length = Marshal.SizeOf(typeof(SecurityAttributes)), Descriptor = descriptor };
+                var handle = new EventWaitHandle(false, manualReset ? EventResetMode.ManualReset : EventResetMode.AutoReset);
+                var old = handle.SafeWaitHandle;
+                // CREATE_EVENT_MANUAL_RESET = 1; EVENT_MODIFY_STATE | SYNCHRONIZE.
+                handle.SafeWaitHandle = CheckedHandle(CreateEventEx(ref security, name, manualReset ? 1u : 0u, 0x00100002));
+                old.Dispose();
+                return handle;
+            }
+            finally { LocalFree(descriptor); }
+        }
+
         public void Dispose()
         {
             _activationWait?.Unregister(null);

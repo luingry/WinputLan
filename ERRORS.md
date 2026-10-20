@@ -1,5 +1,12 @@
 # Errors and prevention
 
+## 2026-10-19 - `RunEx` da tarefa agendada falhava com E_INVALIDARG (módulo SwissTechKnife)
+
+- Sintoma: `IRegisteredTask.RunEx` (e também `Run`) chamado por late binding (`InvokeMember`) lançava `ArgumentException 0x80070057` / "O valor não recai no intervalo esperado" ao passar os parâmetros `$(Arg0)`/`$(Arg1)`.
+- Causa raiz: os parâmetros foram passados como `object[]`, que vira `VT_ARRAY|VT_VARIANT`; o Agendador de Tarefas só aceita uma string ou `VT_ARRAY|VT_BSTR`.
+- Solução: passar `string[]` (`ElevatedTask.Run`). Verificado com uma tarefa temporária não elevada cujo `cmd /c echo` gravou `--parent 4321 --show` e foi removida em seguida.
+- Prevenção: ao mudar a forma de iniciar a tarefa, repetir esse teste com uma tarefa descartável; a consulta (`GetTask`) funcionar não prova que `RunEx` aceita os parâmetros.
+
 ## 2026-10-07 - Tentativas sem CAPTCHA consumiam a capacidade global de relatos
 
 - Sintoma reproduzido localmente: requisições com token ausente, vazio ou inválido aumentavam o orçamento diário compartilhado; depois de esgotá-lo, novos relatos de outros IPs recebiam 429 antes de verificar o CAPTCHA.

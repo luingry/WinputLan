@@ -106,10 +106,12 @@ namespace WinputLan
             _config = config ?? WinputConfig.CreateDefault();
             SizeChanged += (sender, args) => ConfigureMachineRows();
             ContentRendered += (sender, args) => FitHeightToContent();
-            _backgroundLifecycle = new BackgroundLifecycle(_config.ContinueInBackground);
+            // Hosted: closing only hides the window; the SwissTechKnife module decides when the process ends.
+            _backgroundLifecycle = new BackgroundLifecycle(IsHosted || _config.ContinueInBackground);
             _configStore = configStore;
             // After an update, the first time the window opens (also when started in the tray) shows the new version's notes.
-            if (ReleaseNotes.ShouldShowAfterUpdate(_config.LastSeenVersion, InstalledVersion, configStore != null && configStore.CreatedNew))
+            // Hosted: the host shows the module's release notes when it updates it.
+            if (!IsHosted && ReleaseNotes.ShouldShowAfterUpdate(_config.LastSeenVersion, InstalledVersion, configStore != null && configStore.CreatedNew))
                 ContentRendered += (sender, args) => Dispatcher.BeginInvoke(new Action(ShowUpdatedReleaseNotes), DispatcherPriority.ApplicationIdle);
             else if (_config.LastSeenVersion != InstalledVersion) RememberSeenVersion();
             LocalNameText.Text = _config.DisplayName;
@@ -123,7 +125,15 @@ namespace WinputLan
             RenderEdgeSettings();
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             _isElevated = ProcessElevation.IsCurrentElevated();
-            _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = _config.RunElevated && _isElevated; _suppressElevationToggle = false;
+            _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = (IsHosted || _config.RunElevated) && _isElevated; _suppressElevationToggle = false;
+            if (IsHosted)
+            {
+                // SwissTechKnife owns auto-start, background running and updates of the hosted app.
+                StartWithWindowsCheckBox.Visibility = Visibility.Collapsed;
+                BackgroundModeCheckBox.Visibility = Visibility.Collapsed;
+                UpdatesButton.Visibility = Visibility.Collapsed;
+                if (UpdateFrequencyButton.Parent is FrameworkElement updateRow) updateRow.Visibility = Visibility.Collapsed;
+            }
             _suppressStartupToggle = true; StartWithWindowsCheckBox.IsChecked = _config.StartWithWindows; _suppressStartupToggle = false;
             VersionButton.Content = "v" + InstalledVersion;
             RemoteAddressBox.Text = string.IsNullOrWhiteSpace(_config.RemoteAddress) ? "127.0.0.1" : _config.RemoteAddress;
@@ -147,7 +157,7 @@ namespace WinputLan
                 _hotkeys.Register(HotkeyAction.SelectLocal, HotkeyGesture.Parse(_config.LocalHotkey));
                 _hotkeys.Register(HotkeyAction.SelectRemote, HotkeyGesture.Parse(_config.RemoteHotkey));
                 _hotkeyBypass = new HotkeyBypassDetector(HotkeyGesture.Parse(_config.LocalHotkey), HotkeyGesture.Parse(_config.RemoteHotkey));
-                _certificateManager = new CertificateManager(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan"), new DpapiSecretProtector());
+                _certificateManager = new CertificateManager(App.DataDirectory, new DpapiSecretProtector());
                 _certificate = _certificateManager.LoadOrCreate();
                 _pinStore = new PinStore(new DpapiSecretProtector());
                 if (_config.PinnedSecret != null) _pinStore.LoadProtectedBlob(_config.PinnedSecret);
@@ -186,11 +196,11 @@ namespace WinputLan
                 _accessCodeTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
                 _accessCodeTimer.Tick += (s, e) => _listenerPairingCoordinator?.RefreshExpiredAccessCode();
                 _accessCodeTimer.Start();
-                CreateTrayIcon(); _trayIcon.Visible = true;
-                StartAutomaticUpdateChecks();
+                // Hosted: no tray icon, update checks or Run-key/logon-task registration (the host owns them).
+                if (!IsHosted) { CreateTrayIcon(); _trayIcon.Visible = true; StartAutomaticUpdateChecks(); }
                 StartBlockedInputWatcher();
                 // Keeps the startup entry pointing at this executable and mode after updates or elevation changes.
-                if (_config.StartWithWindows) ApplyStartupRegistration(false);
+                if (!IsHosted && _config.StartWithWindows) ApplyStartupRegistration(false);
                 RenderMachines();
                 AddLog("local", "local", "Hooks", "armed-controller-only");
             }
@@ -203,7 +213,7 @@ namespace WinputLan
 
         private void Window_Closing(object sender, System.ComponentModel.CancelEventArgs e)
         {
-            if (_backgroundLifecycle.ShouldHideOnClose) { e.Cancel = true; HideToTray(); return; }
+            if (_backgroundLifecycle.ShouldHideOnClose) { e.Cancel = true; if (IsHosted) Hide(); else HideToTray(); return; }
             Cleanup();
         }
 
@@ -323,6 +333,7 @@ namespace WinputLan
         private void RunElevatedCheckBox_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppressElevationToggle) return;
+            if (IsHosted) { ChangeHostedElevation(RunElevatedCheckBox.IsChecked == true); return; }
             var enable = RunElevatedCheckBox.IsChecked == true;
             _config.RunElevated = enable;
             try { _configStore.Save(_config); } catch { }
@@ -339,6 +350,37 @@ namespace WinputLan
             _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = false; _suppressElevationToggle = false;
             // The UAC prompt ignores remote input, so a PC toggled while being controlled can never confirm it.
             MessageBox.Show("O Windows não confirmou a permissão de administrador, então a opção continua desligada.\n\nA tela de confirmação do Windows (UAC) só aceita o mouse e o teclado físicos deste PC. Ative a opção usando o mouse e o teclado deste PC e confirme o aviso.", "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+
+        // Hosted: the module starts the app elevated through an on-demand scheduled task, so the host never shows a
+        // UAC prompt. Enabling asks UAC once (this click) to install the admin-only copy and register the task;
+        // disabling deletes the task from the elevated copy. Either way the module relaunches the app in the new mode.
+        private async void ChangeHostedElevation(bool enable)
+        {
+            _config.RunElevated = enable;
+            try { _configStore.Save(_config); } catch { }
+            if (enable == _isElevated) return;
+            RunElevatedCheckBox.IsEnabled = false;
+            try
+            {
+                if (!enable)
+                {
+                    if (await Task.Run(() => HostedAdmin.DeleteTask())) { AddLog("local", "local", "Elevation", "hosted-task-removed"); ((App)Application.Current).ExitHosted(HostedOptions.RestartExitCode); return; }
+                    _config.RunElevated = true; try { _configStore.Save(_config); } catch { }
+                    _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = true; _suppressElevationToggle = false;
+                    MessageBox.Show("Não foi possível desligar a opção agora. Tente novamente.", "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+                var dataDirectory = App.DataDirectory;
+                var code = await Task.Run(() => HostedAdmin.RunElevated("enable", dataDirectory));
+                if (code == 0) { AddLog("local", "local", "Elevation", "hosted-task-registered"); ((App)Application.Current).ExitHosted(HostedOptions.RestartExitCode); return; }
+                _config.RunElevated = false; try { _configStore.Save(_config); } catch { }
+                _suppressElevationToggle = true; RunElevatedCheckBox.IsChecked = false; _suppressElevationToggle = false;
+                MessageBox.Show(code == null
+                    ? "O Windows não confirmou a permissão de administrador, então a opção continua desligada.\n\nA tela de confirmação do Windows (UAC) só aceita o mouse e o teclado físicos deste PC. Ative a opção usando o mouse e o teclado deste PC e confirme o aviso."
+                    : "Não foi possível preparar a permissão de administrador, então a opção continua desligada.", "Winput LAN", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            finally { RunElevatedCheckBox.IsEnabled = true; }
         }
 
         // UIPI silently discards input injected into elevated windows; tell the person at this PC why control paused.
@@ -359,6 +401,7 @@ namespace WinputLan
             if (DateTime.UtcNow - _lastBlockedHintUtc < TimeSpan.FromSeconds(30)) return;
             _lastBlockedHintUtc = DateTime.UtcNow;
             AddLog("remote", "local", "Input", "blocked-by-windows");
+            if (IsHosted) return; // No notification area icon when hosted; the event stays in the input log.
             CreateTrayIcon();
             _trayIcon.Visible = true;
             _trayIcon.ShowBalloonTip(6000, "Winput LAN: entrada bloqueada", message, Forms.ToolTipIcon.Warning);
@@ -551,6 +594,14 @@ namespace WinputLan
             CreateTrayIcon();
             _trayIcon.Visible = true;
         }
+
+        // Hosted start without --show: builds the window handle (hooks, listener) hidden and with no tray icon.
+        public void StartHidden() { new WindowInteropHelper(this).EnsureHandle(); }
+
+        // Saves and releases hooks, sockets and the tray icon, then closes the window for real.
+        public void ExitApplication() { ExitFromTray(); }
+
+        private static bool IsHosted { get { return App.Hosted != null; } }
 
         private void StartWithWindowsCheckBox_Changed(object sender, RoutedEventArgs e)
         {

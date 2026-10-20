@@ -42,6 +42,7 @@ namespace WinputLan.Tests
             Run("reconnect backoff bounds", TestBackoff);
             Run("automatic update schedule", TestUpdateSchedule);
             Run("elevated relaunch policy", TestElevationPolicy);
+            Run("SwissTechKnife hosted command line", TestHostedOptions);
             Run("machine list follows where input goes", TestMachineList);
             Run("trusted peers match identity and certificate", TestTrustedPeers);
             Run("report latency snapshot preserves samples and publication", () => {
@@ -480,6 +481,28 @@ namespace WinputLan.Tests
             Assert(ElevationPolicy.ShouldRelaunchElevated(true, false, new string[0]), "enabled and not elevated relaunches");
             Assert(!ElevationPolicy.ShouldRelaunchElevated(true, true, new string[0]), "already elevated stays");
             Assert(!ElevationPolicy.ShouldRelaunchElevated(true, false, new[] { ElevationPolicy.RelaunchedArgument }), "a relaunched copy never loops");
+        }
+
+        private static void TestHostedOptions()
+        {
+            Assert(HostedOptions.Parse(new string[0]) == null, "standalone without --hosted");
+            Assert(HostedOptions.Parse(new[] { "--hosted" }) == null, "hosted requires a data folder");
+            Assert(HostedOptions.Parse(new[] { "--hosted", "--data", "relative\\dir" }) == null, "data folder must be rooted");
+            var options = HostedOptions.Parse(new[] { "--hosted", "--data", @"C:\Users\x\STK\Data\winput-lan\", "--parent", "1234", "--show" });
+            Assert(options != null && options.DataDirectory == @"C:\Users\x\STK\Data\winput-lan" && options.ParentId == 1234 && options.ShowOnStart, "full hosted command line");
+            // A task run without parameters leaves the $(ArgN) placeholders; they must not break parsing.
+            options = HostedOptions.Parse(new[] { "--hosted", "--data", @"D:\data", "--parent", "$(Arg0)", "$(Arg1)" });
+            Assert(options != null && options.ParentId == 0 && !options.ShowOnStart, "unfilled task placeholders are ignored");
+            options = HostedOptions.Parse(new[] { "--HOSTED", "--data", @"D:\data", "--parent", "-5", "--hidden" });
+            Assert(options != null && options.ParentId == 0 && !options.ShowOnStart, "invalid parent and --hidden");
+            Assert(HostedOptions.TaskArguments(@"D:\data\") == "--hosted --data \"D:\\data\" --parent $(Arg0) $(Arg1)", "task arguments");
+            Assert(HostedOptions.RuntimeExecutable(@"D:\data") == @"D:\data\runtime\WinputLan.Hosted.exe", "runtime copy path");
+            string data;
+            Assert(HostedOptions.ParseAdminAction(new[] { "--hosted-admin", "enable", "--data", @"D:\data" }, out data) == "enable" && data == @"D:\data", "admin enable");
+            Assert(HostedOptions.ParseAdminAction(new[] { "--hosted-admin", "network", "--data", @"D:\data" }, out data) == "network", "admin network");
+            Assert(HostedOptions.ParseAdminAction(new[] { "--hosted-admin", "format", "--data", @"D:\data" }, out data) == null, "unknown admin action");
+            Assert(HostedOptions.ParseAdminAction(new[] { "--hosted-admin", "enable" }, out data) == null, "admin action requires data");
+            Assert(HostedOptions.ParseAdminAction(new[] { "--hosted", "--data", @"D:\data" }, out data) == null, "hosted run is not an admin action");
         }
 
         private static void TestUpdateSchedule()

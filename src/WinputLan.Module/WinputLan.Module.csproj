@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    SwissTechKnife module (winput-lan): a thin supervisor that runs the Winput LAN app in its own process
+    (hosted mode). The app build is packaged next to it under app/ by scripts/pack-module.ps1; this assembly
+    depends only on the SDK, so it loads from memory (WebView2 lives in the child process only).
+    The module version is the app's VERSION (Directory.Build.props).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <RootNamespace>WinputLan.Module</RootNamespace>
+    <AssemblyName>WinputLan.Module</AssemblyName>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <DebugType>embedded</DebugType>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Compile-only: the host provides the one shared copy at runtime. Refresh from a SwissTechKnife build. -->
+    <Reference Include="SwissTechKnife.Sdk" HintPath="lib\SwissTechKnife.Sdk.dll" Private="false" />
+    <None Include="module.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

@@ -5,6 +5,18 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.4.0] - 2026-10-19
+
+### Adicionado
+
+- O Winput LAN agora também pode ser instalado como módulo do SwissTechKnife. Nele, o app inicia junto com o SwissTechKnife, fica sem ícone na área de notificação e é atualizado pelo próprio SwissTechKnife.
+- Na primeira vez como módulo, as configurações, as máquinas reconhecidas e a identidade deste PC são copiadas da instalação normal, então os outros PCs continuam reconhecendo este.
+- Como módulo, **Permitir controlar apps de administrador** pede a confirmação do Windows uma única vez; depois o app já inicia com essa permissão, sem novos avisos ao ligar o PC.
+
+### Alterado
+
+- O Winput LAN instalado normalmente e o módulo do SwissTechKnife nunca rodam ao mesmo tempo: enquanto um estiver aberto, o outro aguarda.
+
 ## [0.3.34] - 2026-10-08
 
 ### Adicionado

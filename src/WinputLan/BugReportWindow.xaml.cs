@@ -59,7 +59,7 @@ namespace WinputLan
             try {
                 if (_web == null) {
                     _web = new WebView2 { DefaultBackgroundColor = System.Drawing.Color.FromArgb(23,28,32) }; ChallengeHost.Children.Add(_web);
-                    var profile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "WinputLan", "report-webview");
+                    var profile = Path.Combine(App.DataDirectory, "report-webview");
                     var env = await CoreWebView2Environment.CreateAsync(null, profile);
                     if (_closed) return;
                     await _web.EnsureCoreWebView2Async(env); if (_closed) return;

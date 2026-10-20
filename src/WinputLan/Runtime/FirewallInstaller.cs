@@ -8,11 +8,13 @@ namespace WinputLan.Runtime
         public const string RuleName = "Winput LAN (Private TCP)";
         public const string RuleDescription = "Winput LAN secure peer input transport; Private profile only.";
 
-        public static string BuildNetshArguments(string programPath, int port)
+        public static string BuildNetshArguments(string programPath, int port) { return BuildNetshArguments(programPath, port, RuleName); }
+
+        public static string BuildNetshArguments(string programPath, int port, string ruleName)
         {
             if (string.IsNullOrWhiteSpace(programPath)) throw new ArgumentException("Program path is required.", "programPath");
             if (port < 1 || port > 65535) throw new ArgumentOutOfRangeException("port");
-            return string.Format("advfirewall firewall add rule name=\"{0}\" description=\"{1}\" dir=in action=allow enable=yes profile=Private protocol=TCP localport={2} program=\"{3}\"", RuleName, RuleDescription, port, programPath.Replace("\"", string.Empty));
+            return string.Format("advfirewall firewall add rule name=\"{0}\" description=\"{1}\" dir=in action=allow enable=yes profile=Private protocol=TCP localport={2} program=\"{3}\"", ruleName, RuleDescription, port, programPath.Replace("\"", string.Empty));
         }
 
         public static int Install(string programPath, int port)

@@ -39,4 +39,6 @@ pwsh -File scripts/build.ps1 -Configuration Release
 
 Para publicar uma versão, veja [docs/RELEASING.md](docs/RELEASING.md).
 
+Módulo do SwissTechKnife (`winput-lan`): `powershell -File scripts/pack-module.ps1` gera `artifacts/winput-lan-<versão>.zip`. Modo hospedado, permissões de administrador e firewall estão em [docs/SWISSTECHKNIFE.md](docs/SWISSTECHKNIFE.md).
+
 Para configurar e operar o serviço de relatos, veja [docs/BUG_REPORTS_SETUP.md](docs/BUG_REPORTS_SETUP.md).
