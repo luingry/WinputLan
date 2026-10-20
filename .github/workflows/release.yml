@@ -3,12 +3,43 @@ name: release
 on:
   push:
     tags: ['v*.*.*']
+    # A VERSION change merged into main releases v<VERSION> too, so the SwissTechKnife catalog sync picks up
+    # the module package without a manual tag.
+    branches: [main]
+    paths: [VERSION]
 
 permissions:
   contents: write
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      publish: ${{ steps.tag.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.ref_type }}" = tag ]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          tag="v$(tr -d '[:space:]' < VERSION)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "Tag $tag already exists; its own run publishes it."
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: prepare
+    if: needs.prepare.outputs.publish == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +52,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content VERSION -Raw).Trim()
-          if ("v$version" -ne "${{ github.ref_name }}") { throw "Tag/version mismatch" }
+          if ("v$version" -ne "${{ needs.prepare.outputs.tag }}") { throw "Tag/version mismatch" }
       - name: Build and test
         shell: pwsh
         run: ./scripts/build.ps1 -Configuration Release
@@ -73,6 +104,8 @@ jobs:
       - name: Publish release assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           body_path: artifacts/release-notes.md
           files: |
             artifacts/WinputLan-*/**
@@ -84,7 +117,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $current = '${{ github.ref_name }}'
+          $current = '${{ needs.prepare.outputs.tag }}'
           gh release list --limit 1000 --json tagName --jq '.[].tagName' | Where-Object { $_ -and $_ -ne $current } | ForEach-Object {
             gh release delete $_ --yes
             if ($LASTEXITCODE -ne 0) { throw "Failed to delete release $_" }
