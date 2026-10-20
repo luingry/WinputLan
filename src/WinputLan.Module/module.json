@@ -5,5 +5,16 @@
   "entryType": "WinputLan.Module.WinputLanModule",
   "sdkVersion": 1,
   "activation": "startup",
-  "loadMode": "memory"
+  "loadMode": "memory",
+  "releaseNotes": [
+    {
+      "version": "0.4.0",
+      "notes": [
+        "First release as a SwissTechKnife module: starts with SwissTechKnife in its own process, without a notification-area icon.",
+        "Settings, known machines and this PC's identity are copied from the regular installation on first run.",
+        "Allowing control of administrator apps asks for Windows confirmation once; afterwards the module starts with that permission.",
+        "The regular Winput LAN and the module never run at the same time."
+      ]
+    }
+  ]
 }
