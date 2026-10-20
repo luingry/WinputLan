@@ -17,6 +17,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 - O Winput LAN instalado normalmente e o módulo do SwissTechKnife nunca rodam ao mesmo tempo: enquanto um estiver aberto, o outro aguarda.
 
+### Corrigido
+
+- Com **Iniciar com o Windows** e **Permitir controlar apps de administrador** ligados, o Winput LAN não fecha mais sozinho depois de 3 dias, roda com prioridade normal e também inicia quando o notebook está na bateria.
+
 ## [0.3.34] - 2026-10-08
 
 ### Adicionado

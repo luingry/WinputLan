@@ -49,6 +49,24 @@ jobs:
           [IO.File]::WriteAllText($key, $env:OTA_SIGNING_PRIVATE_KEY_PEM, [Text.UTF8Encoding]::new($false))
           ./scripts/finalize.ps1 -Configuration Release -OtaPrivateKeyPath $key
           Remove-Item -LiteralPath $key -Force
+      # SwissTechKnife module package, attached to this same release: older releases are deleted below,
+      # so a separately published module zip would disappear. The host catalog takes its sha256 and size.
+      - name: Package SwissTechKnife module
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          ./scripts/pack-module.ps1 -Configuration Release | Out-Null
+          $zip = "artifacts/winput-lan-$version.zip"
+          if (-not (Test-Path -LiteralPath $zip)) { throw "Module package $zip was not produced." }
+          $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $size = (Get-Item -LiteralPath $zip).Length
+          @(
+            '### SwissTechKnife module (winput-lan)'
+            ''
+            '| File | Version | sha256 | size |'
+            '|---|---|---|---|'
+            "| winput-lan-$version.zip | $version | ``$hash`` | $size |"
+          ) | Add-Content -Path $env:GITHUB_STEP_SUMMARY -Encoding utf8
       - name: Release notes
         shell: pwsh
         run: ./scripts/release-notes.ps1 | Set-Content artifacts/release-notes.md -Encoding UTF8
@@ -58,6 +76,7 @@ jobs:
           body_path: artifacts/release-notes.md
           files: |
             artifacts/WinputLan-*/**
+            artifacts/winput-lan-*.zip
           fail_on_unmatched_files: true
       # Only the newest release is kept to save storage quota; the updater reads releases/latest. Git tags stay.
       - name: Delete older releases

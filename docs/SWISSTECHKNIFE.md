@@ -49,3 +49,11 @@ Decision:
 | Admin control off | The elevated app deletes the task itself (no prompt) and exits with code 4; the module restarts it non-elevated. The Program Files copy stays, inert without the task. |
 
 Limits: uninstalling the module from STK cannot remove the task, the Program Files copy or the firewall rules (the SDK has no uninstall hook and removing them needs elevation). Turning admin control off first removes the task; the rest is inert. The task is per user; the Program Files copy is shared by all users of the PC.
+
+## Release
+
+`.github/workflows/release.yml` runs `scripts/pack-module.ps1` on every `v<VERSION>` tag and attaches the zip to that same app release (the workflow deletes all older releases, so a separately published module zip would disappear). The job fails if the zip is missing and writes its sha256 and size to the job summary for the host catalog:
+
+`https://github.com/luingry/WinputLan/releases/download/v<VERSION>/winput-lan-<VERSION>.zip`
+
+Because older releases are deleted, the catalog entry must move to the new URL, sha256 and size whenever a new app version is released.
