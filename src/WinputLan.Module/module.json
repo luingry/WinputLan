@@ -1,12 +1,19 @@
 {
   "id": "winput-lan",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "entryAssembly": "WinputLan.Module.dll",
   "entryType": "WinputLan.Module.WinputLanModule",
   "sdkVersion": 1,
   "activation": "startup",
   "loadMode": "memory",
+  "window": true,
   "releaseNotes": [
+    {
+      "version": "0.5.0",
+      "notes": [
+        "Double-clicking the module's notification-area icon opens the Winput LAN window."
+      ]
+    },
     {
       "version": "0.4.0",
       "notes": [

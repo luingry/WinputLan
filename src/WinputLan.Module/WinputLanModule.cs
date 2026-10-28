@@ -8,7 +8,7 @@ namespace WinputLan.Module;
 /// (elevated through the app's task when the user enabled administrator control), restarts it after a crash,
 /// stops it when disabled and opens its window from the module page.
 /// </summary>
-public sealed class WinputLanModule : IBackgroundModule
+public sealed class WinputLanModule : IBackgroundModule, IModuleWindow
 {
     private IModuleContext? _context;
     private HostedAppSupervisor? _supervisor;
@@ -26,6 +26,9 @@ public sealed class WinputLanModule : IBackgroundModule
     public void Stop() => _supervisor?.Stop();
 
     public FrameworkElement CreateView() => new ModulePage(_supervisor!, _context!);
+
+    /// <summary>Double click on the module's notification-area icon: opens the Winput LAN window, like the page's button.</summary>
+    public void ShowWindow() => _supervisor?.ShowWindow();
 
     public void Dispose()
     {
