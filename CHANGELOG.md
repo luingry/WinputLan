@@ -5,6 +5,12 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.0] - 2026-10-28
+
+### Adicionado
+
+- Como módulo do SwissTechKnife, o duplo clique no ícone do módulo na área de notificação abre a janela do Winput LAN, como o botão **Abrir Winput LAN** (requer SwissTechKnife 0.5.1 ou mais novo).
+
 ## [0.4.0] - 2026-10-19
 
 ### Adicionado
