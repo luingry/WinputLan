@@ -1,6 +1,6 @@
 {
   "id": "winput-lan",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "entryAssembly": "WinputLan.Module.dll",
   "entryType": "WinputLan.Module.WinputLanModule",
   "sdkVersion": 1,
@@ -8,6 +8,15 @@
   "loadMode": "memory",
   "window": true,
   "releaseNotes": [
+    {
+      "version": "0.5.1",
+      "notes": [
+        "When an antivirus blocks or quarantines Winput LAN, the module page says so and explains how to restore it, instead of only stopping.",
+        "Winput LAN starts again on its own once the file is restored from quarantine, with no SwissTechKnife restart.",
+        "If an antivirus removes only one of the two copies of the app, the module starts the remaining one.",
+        "Disabling the module or closing SwissTechKnife while Winput LAN was exiting no longer raises an internal error."
+      ]
+    },
     {
       "version": "0.5.0",
       "notes": [

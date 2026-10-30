@@ -1,5 +1,13 @@
 # Errors and prevention
 
+## 2026-10-30 - Módulo winput-lan não abria: Windows Defender pôs o app em quarentena
+
+- Sintoma: o módulo ficava parado. `host.log` do SwissTechKnife: `Could not start Winput LAN` com `Win32Exception` "o arquivo contém um vírus ou software possivelmente indesejado" e, depois, `Winput LAN executable not found: ...\app\WinputLan.Hosted.exe` a cada tentativa.
+- Causa raiz: o Windows Defender classificou `WinputLan.Hosted.exe` 0.5.0 como `Trojan:Win32/Bearfoos.A!ml` (heurística de aprendizado de máquina; falso positivo) ao iniciar o processo e colocou em quarentena as duas cópias (pacote e `data\winput-lan\runtime`). O mesmo hash rodava havia dois dias: o veredito veio da nuvem. Executável sem assinatura, renomeado, rodando de AppData, com hooks de teclado/mouse e rede é exatamente o perfil dessa heurística. O supervisor tratava isso como falha genérica e só registrava erro.
+- Solução (0.5.1): estado `Blocked` (`ERROR_VIRUS_INFECTED`/`ERROR_VIRUS_DELETED` 225/226 ou executável ausente). A página explica como restaurar e abre a Segurança do Windows; uma notificação por episódio; sem novas tentativas cegas (cada uma gera outro alerta), mas a impressão digital dos executáveis (presença, tamanho, data) é verificada a cada 10 s e o app volta sozinho quando o arquivo é restaurado. Se só uma cópia sumir, a outra é iniciada. Verificado com um harness que carrega o módulo compilado: ausente → Blocked; nova tentativa manual → Blocked sem nova notificação; arquivo restaurado → Running em ~10 s; só a cópia runtime → Running.
+- Também corrigido: `ObjectDisposedException` em `ProcessWatch.ExitCode` quando o callback de saída corria depois de `Stop()` descartar o watch (exceção sem tratamento em thread do pool, visível no `host.log` de 28/10). O dono é conferido antes de ler o código de saída.
+- Prevenção: assinar o executável (Authenticode) é o que de fato reduz esses vereditos; enquanto isso, enviar cada versão marcada como falso positivo em https://www.microsoft.com/wdsi/filesubmission. Para diagnosticar: `Get-MpThreatDetection` / `Get-MpThreat` mostram o nome da ameaça e os arquivos.
+
 ## 2026-10-19 - `RunEx` da tarefa agendada falhava com E_INVALIDARG (módulo SwissTechKnife)
 
 - Sintoma: `IRegisteredTask.RunEx` (e também `Run`) chamado por late binding (`InvokeMember`) lançava `ArgumentException 0x80070057` / "O valor não recai no intervalo esperado" ao passar os parâmetros `$(Arg0)`/`$(Arg1)`.
