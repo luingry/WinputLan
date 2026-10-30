@@ -15,6 +15,11 @@ public enum HostedAppState
     RunningOutside,
     /// <summary>The app crashed repeatedly; restarts stopped until the user opens it again.</summary>
     Failed,
+    /// <summary>
+    /// An antivirus blocked or quarantined the app. Starts again on its own once the file is restored; never
+    /// retried blindly, since each attempt raises another antivirus alert.
+    /// </summary>
+    Blocked,
 }
 
 /// <summary>Immutable snapshot for the module page.</summary>
@@ -51,6 +56,9 @@ internal sealed class HostedAppSupervisor : IDisposable
     private static readonly TimeSpan CrashWindow = TimeSpan.FromMinutes(1);
     private const int MaxCrashesPerWindow = 3;
     private static readonly TimeSpan OutsidePollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan BlockedPollInterval = TimeSpan.FromSeconds(10);
+    private const int ErrorVirusInfected = 225;
+    private const int ErrorVirusDeleted = 226;
     private const int ExitTimeoutMs = 5000;
     private const int ElevatedStartTimeoutMs = 15000;
 
@@ -72,6 +80,7 @@ internal sealed class HostedAppSupervisor : IDisposable
     private bool _busy;
     private bool _launching;
     private bool _showPending;
+    private bool _blockNotified;
 
     public HostedAppSupervisor(AppDeployment deployment, string dataDirectory, IModuleLog log, Action<string, NotificationKind> notify)
     {
@@ -287,13 +296,6 @@ internal sealed class HostedAppSupervisor : IDisposable
             return;
         }
 
-        if (!File.Exists(_deployment.PackageExecutable))
-        {
-            _log.Error("Winput LAN executable not found: " + _deployment.PackageExecutable);
-            SetState(HostedAppState.Failed);
-            return;
-        }
-
         SetState(HostedAppState.Starting);
         try
         {
@@ -315,10 +317,35 @@ internal sealed class HostedAppSupervisor : IDisposable
                     elevated = false;
                 }
             }
+            var blocked = false;
             if (watch is null)
             {
-                executable = _deployment.PrepareRuntime();
-                watch = LaunchNormal(executable, show);
+                var candidates = _deployment.LaunchCandidates();
+                if (candidates.Count == 0)
+                {
+                    _log.Error("Winput LAN executable not found (an antivirus may have quarantined it): " + _deployment.PackageExecutable);
+                    EnterBlocked();
+                    return;
+                }
+                foreach (var candidate in candidates)
+                {
+                    try
+                    {
+                        watch = LaunchNormal(candidate, show);
+                        executable = candidate;
+                        break;
+                    }
+                    catch (Win32Exception error) when (error.NativeErrorCode is ErrorVirusInfected or ErrorVirusDeleted)
+                    {
+                        _log.Warn($"Windows blocked {candidate} as a threat: {error.Message}");
+                        blocked = true;
+                    }
+                }
+            }
+            if (watch is null && blocked)
+            {
+                EnterBlocked();
+                return;
             }
             if (watch is null)
             {
@@ -338,6 +365,7 @@ internal sealed class HostedAppSupervisor : IDisposable
                 }
                 _watch = watch;
                 _elevated = elevated;
+                _blockNotified = false;
             }
             watch.OnExit(OnExited);
             _log.Info($"Winput LAN started (pid {watch.ProcessId}{(elevated ? ", elevated" : "")}).");
@@ -414,16 +442,16 @@ internal sealed class HostedAppSupervisor : IDisposable
 
     private void OnExited(ProcessWatch watch)
     {
-        var code = watch.ExitCode;
         bool stopping;
         lock (_gate)
         {
             if (!ReferenceEquals(_watch, watch))
-                return; // Stop() owns it.
+                return; // Stop() owns it (and may have disposed it already).
             _watch = null;
             _elevated = false;
             stopping = _stopping || _disposed;
         }
+        var code = watch.ExitCode;
         watch.Dispose();
         if (stopping)
             return;
@@ -478,6 +506,35 @@ internal sealed class HostedAppSupervisor : IDisposable
                     Launch(show: false);
             }, null, OutsidePollInterval, OutsidePollInterval);
         }
+    }
+
+    /// <summary>
+    /// The antivirus removed or refused the app. Tells the user once, then watches the executables cheaply and
+    /// starts the app as soon as one of them changes (restored from quarantine, or the module reinstalled).
+    /// </summary>
+    private void EnterBlocked()
+    {
+        // Taken after the attempt: refreshing the runtime copy may have changed the files on the way.
+        var fingerprint = _deployment.Fingerprint();
+        SetState(HostedAppState.Blocked);
+        bool notify;
+        lock (_gate)
+        {
+            if (_stopping || _disposed) return;
+            notify = !_blockNotified;
+            _blockNotified = true;
+            _retry?.Dispose();
+            _retry = new Timer(_ =>
+            {
+                if (_deployment.Fingerprint() != fingerprint)
+                {
+                    _log.Info("Winput LAN files changed while blocked; starting it again.");
+                    Launch(show: false);
+                }
+            }, null, BlockedPollInterval, BlockedPollInterval);
+        }
+        if (notify)
+            _notify("O antivírus bloqueou o Winput LAN. Abra o módulo para ver como liberar.", NotificationKind.Warning);
     }
 
     private void ScheduleLaunch(TimeSpan delay)

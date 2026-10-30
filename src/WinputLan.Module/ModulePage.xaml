@@ -19,6 +19,13 @@
                 <TextBlock x:Name="StatusDetail" Style="{StaticResource Text.Paragraph}" Margin="0,10,0,0" />
                 <TextBlock x:Name="ElevationText" Style="{StaticResource Text.Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
 
+                <StackPanel x:Name="BlockedNotice" Margin="0,18,0,0" Visibility="Collapsed">
+                    <TextBlock Style="{StaticResource Text.Paragraph}"
+                               Text="Isso costuma ser um falso positivo da detecção automática do antivírus, comum em apps que controlam mouse e teclado pela rede. No Windows Defender: Segurança do Windows &gt; Proteção contra vírus e ameaças &gt; Histórico de proteção, abra o item do Winput LAN e escolha Ações &gt; Restaurar (ou Permitir no dispositivo). O módulo volta sozinho assim que o arquivo for restaurado." />
+                    <Button x:Name="OpenSecurityButton" ui:Ui.Icon="&#xE83D;" Content="Abrir Segurança do Windows"
+                            HorizontalAlignment="Left" Margin="0,10,0,0" Click="OpenSecurityButton_OnClick" />
+                </StackPanel>
+
                 <StackPanel x:Name="AdminNotice" Margin="0,18,0,0" Visibility="Collapsed">
                     <TextBlock Style="{StaticResource Text.Paragraph}"
                                Text="O Winput LAN foi atualizado. Confirme a permissão de administrador mais uma vez para continuar controlando apps de administrador, como o Gerenciador de Tarefas." />

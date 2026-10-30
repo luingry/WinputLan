@@ -44,8 +44,51 @@ internal sealed class AppDeployment
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException)
         {
+            // Also an antivirus refusing to write the copy (ERROR_VIRUS_INFECTED surfaces as an IOException).
             _log.Warn("Could not refresh the Winput LAN runtime copy; running from the package folder. " + error.Message);
             return PackageExecutable;
+        }
+    }
+
+    /// <summary>
+    /// Executables to try, best first: the stable runtime copy (refreshed from the package), then the package
+    /// itself. An antivirus may quarantine either one; whichever survives still starts the app. Empty when both
+    /// are gone.
+    /// </summary>
+    public IReadOnlyList<string> LaunchCandidates()
+    {
+        var candidates = new List<string>();
+        if (File.Exists(PackageExecutable))
+        {
+            var prepared = PrepareRuntime();
+            candidates.Add(prepared);
+            if (!string.Equals(prepared, PackageExecutable, StringComparison.OrdinalIgnoreCase))
+                candidates.Add(PackageExecutable);
+        }
+        else if (File.Exists(RuntimeExecutable))
+        {
+            _log.Warn("Winput LAN executable is missing from the package folder; starting the runtime copy.");
+            candidates.Add(RuntimeExecutable);
+        }
+        return candidates;
+    }
+
+    /// <summary>
+    /// Presence, size and timestamp of both executables. Changes when a quarantined file is restored (or the
+    /// module is reinstalled), which is when a blocked app is worth starting again.
+    /// </summary>
+    public string Fingerprint() => Describe(PackageExecutable) + "|" + Describe(RuntimeExecutable);
+
+    private static string Describe(string path)
+    {
+        try
+        {
+            var file = new FileInfo(path);
+            return file.Exists ? $"{file.Length}:{file.LastWriteTimeUtc.Ticks}" : "-";
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return "?";
         }
     }
 

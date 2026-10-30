@@ -32,13 +32,21 @@ internal sealed class ProcessWatch : IDisposable
 
     public bool HasExited => _handle.WaitOne(0);
 
+    /// <summary>-1 while running, or once disposed (the exit callback can race a Stop() that disposed the watch).</summary>
     public int ExitCode
     {
         get
         {
-            if (!GetExitCodeProcess(_handle.SafeWaitHandle, out var code) || code == StillActive)
+            try
+            {
+                if (!GetExitCodeProcess(_handle.SafeWaitHandle, out var code) || code == StillActive)
+                    return -1;
+                return unchecked((int)code);
+            }
+            catch (ObjectDisposedException)
+            {
                 return -1;
-            return unchecked((int)code);
+            }
         }
     }
 

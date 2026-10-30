@@ -5,6 +5,15 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.5.1] - 2026-10-30
+
+### Corrigido
+
+- Como módulo do SwissTechKnife, quando o antivírus bloqueia ou coloca o Winput LAN em quarentena (por exemplo, um falso positivo do Windows Defender), a página do módulo mostra o bloqueio e como restaurar o app, em vez de só ficar parada.
+- O Winput LAN volta a abrir sozinho assim que o arquivo é restaurado da quarentena, sem reiniciar o SwissTechKnife.
+- Se o antivírus remover só uma das duas cópias do app, o módulo inicia a cópia que restou.
+- Desativar o módulo ou fechar o SwissTechKnife enquanto o Winput LAN encerrava não gera mais um erro interno.
+
 ## [0.5.0] - 2026-10-28
 
 ### Adicionado

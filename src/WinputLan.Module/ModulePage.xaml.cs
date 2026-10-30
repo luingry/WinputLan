@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Media.Animation;
 using SwissTechKnife.Sdk;
@@ -30,6 +32,7 @@ public partial class ModulePage
         var running = status.State == HostedAppState.Running;
         SetNotice(AdminNotice, status.AdminNeedsConfirm && status.State != HostedAppState.RunningOutside);
         SetNotice(NetworkNotice, status.NetworkBlocked && running);
+        SetNotice(BlockedNotice, status.State == HostedAppState.Blocked);
 
         if (_shownState == status.State && _shownElevated == status.Elevated)
             return;
@@ -50,6 +53,9 @@ public partial class ModulePage
                 "Brush.Warning.Soft", "Brush.Warning"),
             HostedAppState.Failed => ("Parado",
                 "O Winput LAN fechou inesperadamente várias vezes. Abra-o para tentar de novo.",
+                "Brush.Danger.Soft", "Brush.Danger"),
+            HostedAppState.Blocked => ("Bloqueado pelo antivírus",
+                "O antivírus impediu o Winput LAN de abrir ou o colocou em quarentena.",
                 "Brush.Danger.Soft", "Brush.Danger"),
             _ => ("Parado",
                 "O Winput LAN não está em execução. Abra-o para compartilhar o mouse e o teclado.",
@@ -91,6 +97,19 @@ public partial class ModulePage
     }
 
     private void OpenButton_OnClick(object sender, RoutedEventArgs e) => _supervisor.ShowWindow();
+
+    private void OpenSecurityButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("windowsdefender://threat/") { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception error) when (error is Win32Exception or InvalidOperationException)
+        {
+            _context.Log.Warn("Could not open Windows Security: " + error.Message);
+            _context.Notify("Não foi possível abrir a Segurança do Windows.", NotificationKind.Warning);
+        }
+    }
 
     private void ConfirmAdminButton_OnClick(object sender, RoutedEventArgs e) => _supervisor.ConfirmAdministrator();
 
