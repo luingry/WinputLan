@@ -5,6 +5,13 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.6.0] - 2026-11-06
+
+### Adicionado
+
+- Nova opção **Conectar pela extremidade quando desconectado**, abaixo de **Trocar computador pelas extremidades da tela** e desligada por padrão. Com ela ligada, tocar a extremidade deste PC conecta à máquina reconhecida, como o atalho faz, e passa o controle assim que a conexão é aceita.
+- Depois de desconectar pelo botão, tocar a extremidade não reconecta até você conectar de novo pelo atalho ou pelo app. Com a máquina indisponível, uma nova tentativa pela extremidade acontece no máximo a cada 5 segundos.
+
 ## [0.5.1] - 2026-10-30
 
 ### Corrigido

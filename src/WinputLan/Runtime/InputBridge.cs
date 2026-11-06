@@ -88,6 +88,7 @@ namespace WinputLan.Runtime
         private int _mouseCallbacks;
         private int _watchCallbacks;
         private int _oversizedMoves;
+        private NativeMethods.POINT _watchCursor;
 
         // Raised on the hook thread when the watchdog had to re-pin the cursor or reinstall the mouse hook, with details; must not block.
         public event Action<string> MouseHookRecovered;
@@ -253,12 +254,25 @@ namespace WinputLan.Runtime
 
         private void CheckMouseHook()
         {
-            if (!_routing.RemoteActive) return;
             NativeMethods.POINT now;
             if (!NativeMethods.GetCursorPos(out now)) return;
             var seen = _mouseCallbacks != _watchCallbacks;
             var oversized = _oversizedMoves;
             ArmHookWatch();
+            if (!_routing.RemoteActive)
+            {
+                // Local control: a cursor that moved with no hook call means the hook is gone, and edge touches with it.
+                // A program moving the cursor looks the same; reinstalling is harmless then.
+                var moved = now.X != _watchCursor.X || now.Y != _watchCursor.Y;
+                _watchCursor = now;
+                if (moved && !seen)
+                {
+                    RaiseMouseHook();
+                    var reinstalled = MouseHookRecovered;
+                    if (reinstalled != null) try { reinstalled("mouse-reinstalled-local"); } catch { }
+                }
+                return;
+            }
             if (now.X == _anchor.X && now.Y == _anchor.Y) return;
             // Hook positions still computed from where the cursor was count as motion from there.
             BeginSettle(now);

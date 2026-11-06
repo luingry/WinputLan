@@ -38,6 +38,9 @@ namespace WinputLan.Core
         [DataMember(Order = 22)] public ScreenEdge RemoteEdge { get; set; }
         // Last version that ran; a newer installed version opens its release notes once. Missing in older config files.
         [DataMember(Order = 23)] public string LastSeenVersion { get; set; }
+        // With edge switching on, touching this PC's edge also connects to the recognized target when it is disconnected.
+        // Missing in older config files (off).
+        [DataMember(Order = 24)] public bool EdgeConnectEnabled { get; set; }
 
         public static WinputConfig CreateDefault()
         {
