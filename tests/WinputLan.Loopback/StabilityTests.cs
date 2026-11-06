@@ -281,6 +281,8 @@ namespace WinputLan.Loopback
                         for (var i = 0; i < 8; i++) router.Publish(InputEvent.MouseWheel(120, DateTime.UtcNow.Ticks));
                         if (!router.Publish(Key(InputKind.KeyUp, 67))) throw new Exception("overflow leaked KeyUp to local hook");
                         await Until(() => controller.State == PeerConnectionState.Offline && !sink.IsDown(67), "overflow did not disconnect and release remote keys").ConfigureAwait(false);
+                        // Hooks armed for edge connecting outlive the session: closed, it must not swallow local input.
+                        if (router.Publish(Key(InputKind.KeyDown, 68))) throw new Exception("closed session after overflow still swallowed local input");
                     }
                     finally { sendGate.Release(); }
                 }

@@ -66,6 +66,14 @@ namespace WinputLan
         private bool _edgeAnnounced;
         // Set when the switch shortcut starts a connection, so input moves to the target once it is ready.
         private bool _switchToRemoteWhenReady;
+        // Set when an edge touch starts the connection: where the cursor appears on the target once it is ready.
+        private int? _edgeFractionWhenReady;
+        // Disconnecting by the button holds edge connecting until the next outbound connection; otherwise the next touch undoes it.
+        private bool _edgeConnectPaused;
+        // An unreachable target must not get a new attempt from every touch, such as reaching for a scrollbar at that edge.
+        private static readonly TimeSpan EdgeConnectRetryDelay = TimeSpan.FromSeconds(5);
+        private DateTime _edgeConnectNotBeforeUtc = DateTime.MinValue;
+        private bool _cleanedUp;
         private Forms.NotifyIcon _trayIcon;
         private readonly BackgroundLifecycle _backgroundLifecycle;
         private readonly InputLatencyWindow _latencyWindow = new InputLatencyWindow();
@@ -121,7 +129,7 @@ namespace WinputLan
             AutoAcceptKnownCheckBox.IsChecked = _config.AutoAcceptKnownConnections;
             if (!EdgePortal.IsValid(_config.LocalEdge)) _config.LocalEdge = ScreenEdge.Right;
             if (!EdgePortal.IsValid(_config.RemoteEdge)) _config.RemoteEdge = ScreenEdge.Left;
-            _suppressEdgeToggle = true; EdgeSwitchCheckBox.IsChecked = _config.EdgeSwitchEnabled; _suppressEdgeToggle = false;
+            _suppressEdgeToggle = true; EdgeSwitchCheckBox.IsChecked = _config.EdgeSwitchEnabled; EdgeConnectCheckBox.IsChecked = _config.EdgeConnectEnabled; _suppressEdgeToggle = false;
             RenderEdgeSettings();
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             _isElevated = ProcessElevation.IsCurrentElevated();
@@ -220,6 +228,7 @@ namespace WinputLan
         private void Cleanup()
         {
             if (!_backgroundLifecycle.TryBeginCleanup()) return;
+            _cleanedUp = true;
             _capture?.Dispose();
             CursorVisibilityGuard.Shared.Dispose();
             _inputRouter?.Dispose();
@@ -463,6 +472,7 @@ namespace WinputLan
         // Single place that turns session state into the two machine rows and the shortcut labels.
         private void RenderMachines()
         {
+            SyncEdgeConnectCapture();
             var target = _config.TrustedTarget;
             var legacyPeer = target == null && !string.IsNullOrWhiteSpace(_config.PinnedDeviceId);
             var state = _transport.State;
@@ -553,7 +563,7 @@ namespace WinputLan
             SetInputTarget(false);
             StopControllerCapture();
             var outbound = _transport.State != PeerConnectionState.Offline;
-            if (outbound) { _outboundRequestCts?.Cancel(); _pairingCoordinator?.CancelRequest(); _transport.Disconnect("desconectado pelo usuário"); _outboundNote = "Desconectado. Clique para conectar novamente."; }
+            if (outbound) { _edgeConnectPaused = true; _outboundRequestCts?.Cancel(); _pairingCoordinator?.CancelRequest(); _transport.Disconnect("desconectado pelo usuário"); _outboundNote = "Desconectado. Clique para conectar novamente."; }
             if (_listenerTransport != null && _listenerTransport.State == PeerConnectionState.Connected) _listenerTransport.Disconnect("desconectado pelo usuário");
             AddLog("local", "remote", "Transport", "user-disconnected");
             RenderMachines();
@@ -702,7 +712,7 @@ namespace WinputLan
                 PairingOverlay.Visibility = Visibility.Collapsed;
                 RenderMachines();
                 AddLog("local", "remote", "Access", outbound ? "controller-ready" : "target-ready");
-                if (outbound) { EnsureControllerCapture(); if (_switchToRemoteWhenReady) SetInputTarget(true); }
+                if (outbound) { _edgeConnectPaused = false; EnsureControllerCapture(); if (_switchToRemoteWhenReady) SetInputTarget(true, EdgeSwitchActive ? _edgeFractionWhenReady : null); }
             }
             catch { AddLog("local", "remote", "Pairing", "pin-save-failed"); }
         }
@@ -763,14 +773,21 @@ namespace WinputLan
             if (edgeFraction.HasValue && (remote == _remoteActive || !EdgeSwitchActive)) return;
             if (remote && (_transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend))
             {
-                // An edge touch never starts a connection; only the shortcut does.
-                if (edgeFraction.HasValue) return;
+                // An edge touch starts a connection only with its option on, and never over the pairing dialog.
+                if (edgeFraction.HasValue && (!EdgeConnectArmed || PairingOverlay.Visibility == Visibility.Visible)) return;
+                var idle = _transport.State != PeerConnectionState.Connecting && _transport.State != PeerConnectionState.Pairing;
+                if (edgeFraction.HasValue && idle)
+                {
+                    if (DateTime.UtcNow < _edgeConnectNotBeforeUtc) return;
+                    _edgeConnectNotBeforeUtc = DateTime.UtcNow + EdgeConnectRetryDelay;
+                }
                 // The shortcut on a disconnected but recognised target starts a reconnection request.
-                if (HasRecognizedTarget) { _switchToRemoteWhenReady = true; if (_transport.State != PeerConnectionState.Connecting && _transport.State != PeerConnectionState.Pairing) _ = ConnectRecognizedAsync(); }
-                AddLog("local", "remote", "Target", "blocked-unpaired");
+                if (HasRecognizedTarget) { _switchToRemoteWhenReady = true; _edgeFractionWhenReady = edgeFraction; if (idle) _ = ConnectRecognizedAsync(); }
+                AddLog("local", "remote", "Target", edgeFraction.HasValue ? "connect-edge " + EdgePercent(edgeFraction.Value) : "blocked-unpaired");
                 return;
             }
             _switchToRemoteWhenReady = false;
+            _edgeFractionWhenReady = null;
             _remoteActive = remote;
             // With edge switching on, the target always learns its edge; after an edge crossing also where to appear.
             _inputRouter?.SetRemoteActive(remote, remote && EdgeSwitchActive ? EdgePortal.EncodePortal(_config.RemoteEdge, edgeFraction) : null);
@@ -787,10 +804,35 @@ namespace WinputLan
         // Off while the PC controlling this one has edge switching on: its settings decide the edges for both PCs.
         private bool EdgeSwitchActive { get { return _config.EdgeSwitchEnabled && !_edgeLockedByController && EdgePortal.IsValid(_config.LocalEdge) && EdgePortal.IsValid(_config.RemoteEdge); } }
 
+        // Off while this PC is being controlled: a touch here must not open a session against the one in progress.
+        private bool EdgeConnectArmed
+        {
+            get
+            {
+                var inbound = _listenerTransport != null && (_listenerTransport.State == PeerConnectionState.Pairing || _listenerTransport.State == PeerConnectionState.Connected);
+                return _config.EdgeConnectEnabled && EdgeSwitchActive && HasRecognizedTarget && !_edgeConnectPaused && !inbound && !_cleanedUp;
+            }
+        }
+
+        // With no outbound session the hooks exist only to catch the edge touch that starts one.
+        private void SyncEdgeConnectCapture()
+        {
+            if (_inputRouter == null || _cleanedUp || (_transport.State != PeerConnectionState.Offline && _transport.State != PeerConnectionState.Faulted)) return;
+            if (EdgeConnectArmed) EnsureControllerCapture();
+            else if (_capture != null) StopControllerCapture();
+        }
+
         private void EdgeSwitchCheckBox_Changed(object sender, RoutedEventArgs e)
         {
             if (_suppressEdgeToggle) return;
             _config.EdgeSwitchEnabled = EdgeSwitchCheckBox.IsChecked == true;
+            SaveEdgeSettings();
+        }
+
+        private void EdgeConnectCheckBox_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_suppressEdgeToggle) return;
+            _config.EdgeConnectEnabled = EdgeConnectCheckBox.IsChecked == true;
             SaveEdgeSettings();
         }
 
@@ -811,10 +853,12 @@ namespace WinputLan
             var locked = _edgeLockedByController;
             EdgeSwitchCheckBox.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
             EdgeSwitchPanel.Visibility = _config.EdgeSwitchEnabled && !locked ? Visibility.Visible : Visibility.Collapsed;
+            EdgeConnectCheckBox.Visibility = EdgeSwitchPanel.Visibility;
             LocalEdgeButton.Content = EdgeLabel(_config.LocalEdge);
             RemoteEdgeButton.Content = EdgeLabel(_config.RemoteEdge);
             if (_capture != null) _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
             AnnounceEdgeSetting();
+            SyncEdgeConnectCapture();
         }
 
         // Sends None only after an edge was announced, so a session with the option off never sees the new frame.
@@ -845,7 +889,8 @@ namespace WinputLan
             {
                 // A lost session must hand the pinned cursor and keyboard back to this machine immediately.
                 if (state != PeerConnectionState.Connected && _remoteActive) SetInputTarget(false);
-                if (state == PeerConnectionState.Offline || state == PeerConnectionState.Faulted) { _capture?.Dispose(); _capture = null; _switchToRemoteWhenReady = false; }
+                // RenderMachines below removes the hooks, unless they stay armed for the next edge touch.
+                if (state == PeerConnectionState.Offline || state == PeerConnectionState.Faulted) { _switchToRemoteWhenReady = false; _edgeFractionWhenReady = null; }
                 // A new session starts unannounced; with edge switching on the target is told now, before any switch.
                 if (state != PeerConnectionState.Connected) _edgeAnnounced = false; else AnnounceEdgeSetting();
                 RenderMachines();

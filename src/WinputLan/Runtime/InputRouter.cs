@@ -59,8 +59,8 @@ namespace WinputLan.Runtime
             EnqueueResult result;
             lock (_stateGate)
             {
-                // Suppress the rest of a failed capture until the UI removes its hooks.
-                if (_overflowed) return true;
+                // Suppress the rest of a failed capture until its session closes; the hooks may outlive it (edge connect).
+                if (_overflowed) return _transport.State == PeerConnectionState.Connected;
                 if (_disposed || !_remoteActive || _transport.State != PeerConnectionState.Connected || !_transport.AllowsInputSend) return false;
                 result = _queue.Enqueue(value, _activationEpoch);
                 if (result == EnqueueResult.RejectedFull)

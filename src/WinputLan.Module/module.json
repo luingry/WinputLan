@@ -1,6 +1,6 @@
 {
   "id": "winput-lan",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "entryAssembly": "WinputLan.Module.dll",
   "entryType": "WinputLan.Module.WinputLanModule",
   "sdkVersion": 1,
@@ -8,6 +8,13 @@
   "loadMode": "memory",
   "window": true,
   "releaseNotes": [
+    {
+      "version": "0.6.0",
+      "notes": [
+        "New option, off by default, to connect through the screen edge: touching this PC's edge connects to the recognized machine as the shortcut does, and hands over control once the connection is accepted.",
+        "After disconnecting with the button, touching the edge does not reconnect until you connect again by shortcut or in the app. With the machine unavailable, edge attempts happen at most every 5 seconds."
+      ]
+    },
     {
       "version": "0.5.1",
       "notes": [
