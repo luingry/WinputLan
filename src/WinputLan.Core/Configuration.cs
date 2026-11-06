@@ -31,7 +31,7 @@ namespace WinputLan.Core
         [DataMember(Order = 18)] public bool StartWithWindows { get; set; }
         // Recognized controllers (valid trust proof and unchanged certificate) start without the approval prompt.
         [DataMember(Order = 19)] public bool AutoAcceptKnownConnections { get; set; }
-        // Touching the chosen edge of this PC's primary monitor switches to the target, and the target's edge switches back.
+        // Touching the chosen edge of this PC switches to the target, and the target's edge switches back.
         // Missing in older config files (None); enabling the option then picks right/left.
         [DataMember(Order = 20)] public bool EdgeSwitchEnabled { get; set; }
         [DataMember(Order = 21)] public ScreenEdge LocalEdge { get; set; }
@@ -41,6 +41,15 @@ namespace WinputLan.Core
         // With edge switching on, touching this PC's edge also connects to the recognized target when it is disconnected.
         // Missing in older config files (off).
         [DataMember(Order = 24)] public bool EdgeConnectEnabled { get; set; }
+        // The monitors whose edges connect the PCs; missing or primary means the primary monitor.
+        [DataMember(Order = 25)] public EdgeMonitor LocalEdgeMonitor { get; set; }
+        [DataMember(Order = 26)] public EdgeMonitor RemoteEdgeMonitor { get; set; }
+        // Last monitors the target reported, so the settings window shows them while disconnected.
+        [DataMember(Order = 27)] public List<EdgeMonitor> RemoteMonitors { get; set; }
+        // Where the settings window keeps the target's monitors, relative to this PC's virtual screen.
+        [DataMember(Order = 28)] public bool EdgeLayoutSaved { get; set; }
+        [DataMember(Order = 29)] public int EdgeLayoutOffsetX { get; set; }
+        [DataMember(Order = 30)] public int EdgeLayoutOffsetY { get; set; }
 
         public static WinputConfig CreateDefault()
         {

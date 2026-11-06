@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
@@ -53,6 +54,8 @@ namespace WinputLan.Runtime
         public event Action<TimeSpan> InputLatencyMeasured;
         // The target's cursor touched its edge while it had control (fraction along that edge).
         public event Action<int> EdgeReached;
+        // The target's monitors, in answer to QueryMonitorLayout.
+        public event Action<List<EdgeMonitor>> MonitorLayoutReceived;
 
         public bool Publish(InputEvent value)
         {
@@ -101,7 +104,12 @@ namespace WinputLan.Runtime
 
         // Tells the target, focused or not, whether edge switching is on (its edge) or off (None), so it can lock
         // its own setting. Ordered with focus frames by the focus gate.
-        public void AnnounceEdgePortal(ScreenEdge edge)
+        public void AnnounceEdgePortal(ScreenEdge edge) { SendPortalFrame(EdgePortal.EncodePortal(edge, null)); }
+
+        // Asks the target for its monitors; a peer older than 0.7.0 ignores it and MonitorLayoutReceived never fires.
+        public void QueryMonitorLayout() { SendPortalFrame(EdgePortal.EncodeLayoutQuery()); }
+
+        private void SendPortalFrame(byte[] payload)
         {
             var token = _cts.Token;
             _ = Task.Run(() =>
@@ -112,7 +120,7 @@ namespace WinputLan.Runtime
                     try
                     {
                         if (_transport.State != PeerConnectionState.Connected) return;
-                        _transport.SendIfCurrent(FrameType.EdgePortal, EdgePortal.EncodePortal(edge, null), null, token);
+                        _transport.SendIfCurrent(FrameType.EdgePortal, payload, null, token);
                     }
                     finally { _focusGate.Release(); }
                 }
@@ -219,6 +227,12 @@ namespace WinputLan.Runtime
 
         private void Transport_FrameReceived(Frame frame)
         {
+            if (frame.Type == FrameType.MonitorLayout)
+            {
+                List<EdgeMonitor> monitors;
+                if (EdgePortal.TryDecodeLayout(frame.Payload, out monitors)) MonitorLayoutReceived?.Invoke(monitors);
+                return;
+            }
             int fraction;
             if (frame.Type == FrameType.EdgeReached && EdgePortal.TryDecodeReached(frame.Payload, out fraction))
             {

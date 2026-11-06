@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -337,7 +338,6 @@ namespace WinputLan.Tests
             Assert(x == 2559 && y == 1437, "bottom edge end, inset upwards");
             EdgePortal.PointAt(ScreenEdge.Right, primary, EdgePortal.FractionAt(ScreenEdge.Right, primary, 1919, 700), 0, out x, out y);
             Assert(x == 1919 && y == 700, "fraction and point are inverse on the same edge");
-            Assert(EdgePortal.Next(ScreenEdge.Left) == ScreenEdge.Right && EdgePortal.Next(ScreenEdge.Bottom) == ScreenEdge.Left && EdgePortal.Next(ScreenEdge.None) == ScreenEdge.Left, "edge chip cycles");
             var screen = new PixelRect(-2560, 0, 1920, 1440);
             Assert(!EdgePortal.IsConfined(screen, screen) && EdgePortal.IsConfined(primary, screen) && !EdgePortal.IsConfined(default(PixelRect), screen), "only a clip smaller than the screen confines");
             ScreenEdge edge; int? place; int fraction;
@@ -347,6 +347,42 @@ namespace WinputLan.Tests
             Assert(EdgePortal.TryDecodeReached(EdgePortal.EncodeReached(EdgePortal.MaxFraction), out fraction) && fraction == EdgePortal.MaxFraction && !EdgePortal.TryDecodeReached(new byte[1], out fraction), "reached round-trip");
             var frame = FrameCodec.Decode(FrameCodec.Encode(FrameType.EdgeReached, 7, EdgePortal.EncodeReached(123)));
             Assert(frame.Type == FrameType.EdgeReached, "edge frames pass the codec");
+            Assert(FrameCodec.Decode(FrameCodec.Encode(FrameType.MonitorLayout, 8, new byte[1])).Type == FrameType.MonitorLayout, "layout frames pass the codec");
+            // A monitor other than the primary travels with the portal; the primary keeps the payload older peers understand.
+            var side = new PixelRect(1920, -120, 3840, 1080);
+            PixelRect decodedMonitor;
+            Assert(EdgePortal.EncodePortal(ScreenEdge.Left, 5).Length == EdgePortal.PortalPayloadBytes && EdgePortal.EncodePortal(ScreenEdge.Left, 5, default(PixelRect)).Length == EdgePortal.PortalPayloadBytes, "the primary uses the short portal");
+            Assert(EdgePortal.TryDecodePortal(EdgePortal.EncodePortal(ScreenEdge.Right, 40000, side), out edge, out place, out decodedMonitor) && edge == ScreenEdge.Right && place == 40000 && decodedMonitor.Left == 1920 && decodedMonitor.Top == -120 && decodedMonitor.Right == 3840 && decodedMonitor.Bottom == 1080, "portal with a monitor round-trip");
+            Assert(!EdgePortal.TryDecodePortal(new byte[EdgePortal.PortalWithMonitorPayloadBytes], out edge, out place, out decodedMonitor), "an empty monitor is rejected");
+            Assert(EdgePortal.Resolve(new[] { primary, side }, side).Left == 1920 && EdgePortal.Resolve(new[] { primary, side }, default(PixelRect)).Left == 0 && EdgePortal.Resolve(new[] { primary }, side).Left == 0, "chosen monitor falls back to the primary");
+            // The query must not look like a portal to an older peer, which ignores what it cannot decode.
+            Assert(EdgePortal.IsLayoutQuery(EdgePortal.EncodeLayoutQuery()) && !EdgePortal.TryDecodePortal(EdgePortal.EncodeLayoutQuery(), out edge, out place) && !EdgePortal.IsLayoutQuery(EdgePortal.EncodePortal(ScreenEdge.Left, null)), "layout query is apart from portals");
+            List<EdgeMonitor> decodedLayout;
+            var layoutMonitors = new List<EdgeMonitor> { new EdgeMonitor { Right = 1920, Bottom = 1200, Primary = true, Internal = true }, new EdgeMonitor { Left = -2560, Right = 0, Bottom = 1440 } };
+            Assert(EdgePortal.TryDecodeLayout(EdgePortal.EncodeLayout(layoutMonitors), out decodedLayout) && decodedLayout.Count == 2 && decodedLayout[0].Primary && decodedLayout[0].Internal && !decodedLayout[1].Primary && !decodedLayout[1].Internal && decodedLayout[1].Left == -2560 && decodedLayout[1].Bottom == 1440, "layout round-trip");
+            Assert(!EdgePortal.TryDecodeLayout(new byte[1], out decodedLayout) && !EdgePortal.TryDecodeLayout(new byte[] { 2, 0 }, out decodedLayout) && !EdgePortal.TryDecodeLayout(new byte[1 + 17], out decodedLayout) && !EdgePortal.TryDecodeLayout(null, out decodedLayout), "malformed layouts are rejected");
+            var tooMany = new byte[1 + 17 * 17]; tooMany[0] = 17;
+            Assert(!EdgePortal.TryDecodeLayout(tooMany, out decodedLayout), "too many monitors are rejected");
+            // Arrangement: a 2560x1440 primary with a 1920x1080 monitor on its left, and a 1920x1200 notebook.
+            var main = new EdgeMonitor { Right = 2560, Bottom = 1440, Primary = true };
+            var second = new EdgeMonitor { Left = -1920, Top = 360, Right = 0, Bottom = 1440 };
+            var book = new EdgeMonitor { Right = 1920, Bottom = 1200, Primary = true, Internal = true };
+            var desk = new List<EdgeMonitor> { main, second };
+            var notebook = new List<EdgeMonitor> { book };
+            var snap = EdgeLayout.Find(notebook, 2600, 30, desk, 0, 0);
+            Assert(snap.X == 2560 && snap.Y == 0 && !snap.GuideVertical && snap.Guide == 0, "snaps to the near edge, aligned to the start");
+            snap = EdgeLayout.Find(notebook, 1000, 1760, desk, 0, 0);
+            Assert(snap.X == 640 && snap.Y == 1440 && snap.GuideVertical && snap.Guide == 2560, "snaps below, aligned to the end");
+            snap = EdgeLayout.Find(notebook, 300, 200, desk, 0, 0);
+            Assert(!(snap.X < 2560 && snap.X + 1920 > 0 && snap.Y < 1440 && snap.Y + 1200 > 0), "a drop over the monitors lands outside them");
+            snap = EdgeLayout.Find(notebook, -5000, -5000, desk, 0, 0);
+            Assert(EdgeLayout.Contacts(desk, 0, 0, notebook, snap.X, snap.Y).Count > 0, "a far drop still ends in contact");
+            var contacts = EdgeLayout.Contacts(desk, 0, 0, notebook, 2560, 0);
+            Assert(contacts.Count == 1 && contacts[0].First == main && contacts[0].FirstEdge == ScreenEdge.Right && contacts[0].SecondEdge == ScreenEdge.Left && contacts[0].Vertical && contacts[0].Line == 2560 && contacts[0].Start == 0 && contacts[0].End == 1200 && contacts[0].FirstEnd == 1440 && contacts[0].SecondEnd == 1200, "right to left contact keeps the shared stretch and both whole edges");
+            // Under both monitors at once, the longer shared stretch decides.
+            contacts = EdgeLayout.Contacts(desk, 0, 0, notebook, -300, 1440);
+            Assert(contacts.Count == 2 && EdgeLayout.Best(contacts).First == main && EdgeLayout.Best(contacts).FirstEdge == ScreenEdge.Bottom && EdgeLayout.Best(contacts).SecondEdge == ScreenEdge.Top, "the longest contact is the one used");
+            Assert(EdgeLayout.Contacts(desk, 0, 0, notebook, 2561, 0).Count == 0 && EdgeLayout.Best(new List<EdgeContact>()) == null, "a gap is no contact");
             // Edge return: cursor pinned at anchor (2509, 432) is put back at (2557, 756). A move Windows computed from the
             // anchor must not count as fresh, or it drags the cursor back to where control left.
             Assert(SwitchSettle.IsFromOldOrigin(2504, 433, 2509, 432, 2557, 756), "a move computed from the anchor is stale");

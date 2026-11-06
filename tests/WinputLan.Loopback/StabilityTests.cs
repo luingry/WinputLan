@@ -77,6 +77,19 @@ namespace WinputLan.Loopback
                     await Task.Delay(100).ConfigureAwait(false);
                     lock (reached) if (reached.Count != 1) throw new Exception("touch reported while edge switching was off");
                     // Turning the option off unlocks the target; a session end does too.
+                    // The controller asks for the target's monitors, then picks an edge on one that is not the primary.
+                    List<EdgeMonitor> layout = null;
+                    router.MonitorLayoutReceived += monitors => layout = monitors;
+                    router.QueryMonitorLayout();
+                    await Until(() => layout != null, "layout query was not answered").ConfigureAwait(false);
+                    if (layout.Count != 2 || !layout[0].Primary || !layout[1].Internal || layout[1].Left != 1920) throw new Exception("layout answer does not match the target monitors");
+                    if (locks.Count != 1) throw new Exception("a layout query changed the edge lock");
+                    router.SetRemoteActive(false);
+                    await Until(() => sink.Edge == ScreenEdge.None, "unfocus before the monitor edge").ConfigureAwait(false);
+                    sink.Placed = -1;
+                    router.SetRemoteActive(true, EdgePortal.EncodePortal(ScreenEdge.Right, 20000, layout[1].Bounds));
+                    await Until(() => sink.Placed == 20000, "target cursor was not placed on the chosen monitor").ConfigureAwait(false);
+                    if (sink.Edge != ScreenEdge.Right || sink.Monitor.Left != 1920 || sink.Monitor.Right != 3840) throw new Exception("target got the wrong monitor");
                     router.AnnounceEdgePortal(ScreenEdge.None);
                     await Until(() => { lock (locks) return locks.Count == 2 && !locks[1]; }, "turning edge switching off did not unlock the target").ConfigureAwait(false);
                     router.AnnounceEdgePortal(ScreenEdge.Top);
@@ -100,9 +113,14 @@ namespace WinputLan.Loopback
             public bool IsDown(ushort key) { lock (_gate) return _down.Contains(key); }
             public bool Publish(InputEvent value) { lock (_gate) { if (value.Kind == InputKind.KeyDown) _down.Add(value.VirtualKey); else if (value.Kind == InputKind.KeyUp) _down.Remove(value.VirtualKey); return true; } }
             public void ReleaseAll() { lock (_gate) _down.Clear(); }
-            public void SetPortalEdge(ScreenEdge edge) { Edge = edge; }
+            public PixelRect Monitor;
+            public void SetPortalEdge(ScreenEdge edge, PixelRect monitor) { Monitor = monitor; Edge = edge; }
             public bool PlaceAtEdge(ScreenEdge edge, int fraction) { PlacedEdge = edge; Placed = fraction; return true; }
             public bool TryTakeEdgeTouch(out int fraction) { fraction = NextTouch; NextTouch = -1; return fraction >= 0; }
+            public IList<EdgeMonitor> DescribeMonitors()
+            {
+                return new List<EdgeMonitor> { new EdgeMonitor { Right = 1920, Bottom = 1080, Primary = true }, new EdgeMonitor { Left = 1920, Right = 3840, Bottom = 1200, Internal = true } };
+            }
         }
 
         // Send and receive run on their own threads, so input keeps flowing while every pool worker is busy.

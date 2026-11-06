@@ -29,7 +29,11 @@ traceability and are not used as an unbounded runtime dependency.
 
 Interactive states include hover, pressed, keyboard focus, disabled, pairing,
 offline, connected, and failed. The app does not animate state transitions;
-this gives reduced-motion-safe behavior by default. All actions have readable
+this gives reduced-motion-safe behavior by default. The one exception is the
+pointer crossing the active edge in the edge connection window, which explains
+the setting and stands still when Windows animations are off. In that window each
+PC has its own slightly different monitor color, and green marks only the edges
+in contact. All actions have readable
 labels or icon tooltips and automation names, and the peer address input has an automation name. No content typed
 into the shared keyboard is ever surfaced in the log.
 

@@ -13,7 +13,7 @@ The transport is a persistent TLS 1.2 stream. Every frame is little-endian:
 
 Types are `Hello`, `PairingOffer`, `PairingConfirm`, `Input`, `Heartbeat`,
 `HeartbeatAck`, `Goodbye`, `Error`, `ReleaseAll`, `InputAck`, `ControlFocus`,
-`EdgePortal` and `EdgeReached`.
+`EdgePortal`, `EdgeReached` and `MonitorLayout`.
 
 The fixed input record is 32 bytes: kind, reserved byte, flags, X, Y,
 mouse-data, virtual key, scan code, UTC ticks, and a reserved uint. Keyboard
@@ -93,4 +93,10 @@ Only sent while the controller has "Trocar computador pelas extremidades da tela
 - Since 0.3.23 the controller also sends `EdgePortal` without a placement outside focus: when the session becomes connected with the option on, and whenever the option or the target edge changes (edge 0 when turned off, only if an edge was announced before). Any `EdgePortal` with an edge locks the option on the target for the session (`PairedInputReceiver.ControllerEdgeSwitchingChanged`); edge 0 or the end of the session unlocks it. Unfocused, it does not arm the target edge.
 - `EdgeReached` (13), target to controller. Two bytes: the little-endian `uint16` fraction where the target's tracked cursor touched its edge. The controller ignores it unless it is directing input at the target with edge switching on; otherwise it switches back and puts its own cursor at that fraction of its own edge.
 
-A touch counts only when the cursor was on the primary monitor before the motion, has been off the edge since control arrived, no mouse button is held and the cursor is not confined by `ClipCursor`. The primary monitor is the one at the virtual-screen origin. Positions use physical pixels on both sides.
+A touch counts only when the cursor was on the edge's monitor before the motion, has been off the edge since control arrived, no mouse button is held and the cursor is not confined by `ClipCursor`. The primary monitor is the one at the virtual-screen origin. Positions use physical pixels on both sides.
+
+### Monitors (0.7.0)
+
+- Layout query: `EdgePortal` with the single byte `0xFF`, controller to target, when the session becomes connected with the option on and when the settings window opens. Peers older than 0.7.0 drop an `EdgePortal` payload they cannot decode and never answer.
+- `MonitorLayout` (14), target to controller, only in answer to that query, because older peers close the session on this type. One count byte (1 to 16), then 17 bytes per monitor: left, top, right and bottom as little-endian `int32`, and flags (bit 0 primary, bit 1 built-in panel). The controller keeps the list to show it while disconnected.
+- `EdgePortal` with an edge may be 20 bytes: the four above, then the bounds of the target's monitor that owns the edge. The primary monitor uses the short form. A monitor that no longer has those bounds falls back to the primary. Only a target that answered a query can have a monitor chosen.

@@ -20,10 +20,12 @@ namespace WinputLan.Runtime
     // Target side of edge switching. Touches are recorded while injecting motion and taken by the receiver.
     public interface IEdgePortalSink
     {
-        // The edge of this PC's primary monitor that hands control back; None turns detection off.
-        void SetPortalEdge(ScreenEdge edge);
+        // The edge that hands control back, on this monitor or on the primary when it is empty; None turns detection off.
+        void SetPortalEdge(ScreenEdge edge, PixelRect monitor);
         bool PlaceAtEdge(ScreenEdge edge, int fraction);
         bool TryTakeEdgeTouch(out int fraction);
+        // This PC's monitors, answered when the controller asks; not called on the injection thread.
+        IList<EdgeMonitor> DescribeMonitors();
     }
 
     // Low-level hooks run on a dedicated thread with its own message loop. Windows blocks the whole
@@ -74,14 +76,17 @@ namespace WinputLan.Runtime
         // Edge switching on this side. The rest of the state is touched only on the hook thread.
         private readonly Action<int> _edgeReached;
         private volatile ScreenEdge _portalEdge;
+        // A boxed PixelRect, so the hook thread always reads a whole value; empty means the primary monitor.
+        private volatile object _chosenMonitor = default(PixelRect);
         private bool _edgeArmed;
-        private PixelRect _primary;
-        private int _primaryTick;
+        private PixelRect _portalMonitor;
+        private object _portalMonitorChoice;
+        private int _portalMonitorTick;
         // Right after a switch moved the cursor: where it was before, for hook positions computed from there.
         private NativeMethods.POINT _settleOrigin;
         private int _settleUntilTick;
         private bool _settling;
-        private const int PrimaryRefreshMs = 2000;
+        private const int PortalMonitorRefreshMs = 2000;
         // Mouse hook watchdog (hook thread only): callbacks counted and the cursor position at the last check.
         private const int WmTimer = 0x0113;
         private const int HookWatchMs = 250;
@@ -96,8 +101,11 @@ namespace WinputLan.Runtime
         // edgeReached runs on the hook thread with the fraction along this PC's edge; it must not block.
         public LowLevelInputCapture(IInputSink sink, IHotkeyChordDetector hotkeyChordDetector = null, Func<HotkeyAction, bool> hotkeyAction = null, Action<int> edgeReached = null) { _sink = sink ?? throw new ArgumentNullException("sink"); _hotkeyChordDetector = hotkeyChordDetector; _hotkeyAction = hotkeyAction; _edgeReached = edgeReached; }
 
-        // The edge of this PC's primary monitor that switches to the target; None turns edge switching off.
+        // The edge of this PC that switches to the target; None turns edge switching off.
         public ScreenEdge PortalEdge { get { return _portalEdge; } set { _portalEdge = value; } }
+
+        // The monitor that edge belongs to; empty means the primary.
+        public void SetPortalMonitor(PixelRect monitor) { _chosenMonitor = monitor; }
 
         public bool Start()
         {
@@ -208,14 +216,14 @@ namespace WinputLan.Runtime
             // Any switch disarms the edge until the cursor is seen off it.
             _edgeArmed = false;
             var edge = _portalEdge;
-            var primary = EdgePortal.IsValid(edge) && edgeArgument > 0 ? PrimaryMonitor() : default(PixelRect);
+            var portalMonitor = EdgePortal.IsValid(edge) && edgeArgument > 0 ? PortalMonitor() : default(PixelRect);
             if (active)
             {
                 // Pin the local cursor where it is: every hook position is then anchor + motion.
                 NativeMethods.GetCursorPos(out _restore);
                 BeginSettle(_restore);
                 // Leaving through the edge: a later return by shortcut lands just inside it, not on it.
-                if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, EdgePortal.FractionAt(edge, primary, _restore.X, _restore.Y), EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
+                if (!portalMonitor.IsEmpty) EdgePortal.PointAt(edge, portalMonitor, EdgePortal.FractionAt(edge, portalMonitor, _restore.X, _restore.Y), EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
                 _anchor = AnchorFor(_restore);
                 NativeMethods.SetCursorPos(_anchor.X, _anchor.Y);
                 // Windows calls the most recently installed low-level hook first. Another wheel hook installed
@@ -233,7 +241,7 @@ namespace WinputLan.Runtime
                 if (handOver) HandOverModifiers(handed, false);
                 _cursorVisibility.Set(true);
                 // Back through the target's edge: appear at the matching spot of this PC's edge.
-                if (!primary.IsEmpty) EdgePortal.PointAt(edge, primary, edgeArgument - 1, EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
+                if (!portalMonitor.IsEmpty) EdgePortal.PointAt(edge, portalMonitor, edgeArgument - 1, EdgePortal.SpawnInset, out _restore.X, out _restore.Y);
                 BeginSettle(_anchor);
                 NativeMethods.SetCursorPos(_restore.X, _restore.Y);
                 // Same timeout risk as above; a dropped hook here would silently end edge switching.
@@ -308,16 +316,31 @@ namespace WinputLan.Runtime
             return true;
         }
 
-        // Hook thread only (physical pixels). The primary monitor is cached; layout changes are picked up within seconds.
-        private PixelRect PrimaryMonitor()
+        // Hook thread only (physical pixels). The chosen monitor, or the primary when it is gone or none was chosen.
+        // Cached; layout changes are picked up within seconds.
+        private PixelRect PortalMonitor()
         {
             var tick = Environment.TickCount;
-            if (!_primary.IsEmpty && unchecked(tick - _primaryTick) < PrimaryRefreshMs) return _primary;
+            var choice = _chosenMonitor;
+            if (!_portalMonitor.IsEmpty && ReferenceEquals(choice, _portalMonitorChoice) && unchecked(tick - _portalMonitorTick) < PortalMonitorRefreshMs) return _portalMonitor;
+            var chosen = (PixelRect)choice;
+            var found = default(PixelRect);
+            if (!chosen.IsEmpty)
+            {
+                var center = new NativeMethods.POINT { X = chosen.Left + (chosen.Right - chosen.Left) / 2, Y = chosen.Top + (chosen.Bottom - chosen.Top) / 2 };
+                var at = MonitorBounds(NativeMethods.MonitorFromPoint(center, NativeMethods.MonitorDefaultToNearest));
+                if (at.Left == chosen.Left && at.Top == chosen.Top && at.Right == chosen.Right && at.Bottom == chosen.Bottom) found = at;
+            }
+            _portalMonitor = found.IsEmpty ? MonitorBounds(NativeMethods.MonitorFromPoint(new NativeMethods.POINT(), NativeMethods.MonitorDefaultToPrimary)) : found;
+            _portalMonitorChoice = choice;
+            _portalMonitorTick = tick;
+            return _portalMonitor;
+        }
+
+        private static PixelRect MonitorBounds(IntPtr monitor)
+        {
             var info = new NativeMethods.MONITORINFO { Size = Marshal.SizeOf(typeof(NativeMethods.MONITORINFO)) };
-            var monitor = NativeMethods.MonitorFromPoint(new NativeMethods.POINT(), NativeMethods.MonitorDefaultToPrimary);
-            _primary = monitor != IntPtr.Zero && NativeMethods.GetMonitorInfo(monitor, ref info) ? new PixelRect(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom) : default(PixelRect);
-            _primaryTick = tick;
-            return _primary;
+            return monitor != IntPtr.Zero && NativeMethods.GetMonitorInfo(monitor, ref info) ? new PixelRect(info.Monitor.Left, info.Monitor.Top, info.Monitor.Right, info.Monitor.Bottom) : default(PixelRect);
         }
 
         // Local motion reaching this PC's edge switches to the target. Returns true when the move is swallowed.
@@ -325,20 +348,20 @@ namespace WinputLan.Runtime
         {
             var edge = _portalEdge;
             if (!EdgePortal.IsValid(edge) || _edgeReached == null) return false;
-            var primary = PrimaryMonitor();
-            if (!EdgePortal.Touches(edge, primary, point.X, point.Y)) { _edgeArmed = true; return false; }
+            var portalMonitor = PortalMonitor();
+            if (!EdgePortal.Touches(edge, portalMonitor, point.X, point.Y)) { _edgeArmed = true; return false; }
             if (!_edgeArmed || _routing.AnyLocalButtonDown) return false;
             // The hook runs before the cursor moves, so this is where the motion started.
             NativeMethods.POINT previous;
-            if (!NativeMethods.GetCursorPos(out previous) || !primary.Contains(previous.X, previous.Y)) return false;
+            if (!NativeMethods.GetCursorPos(out previous) || !portalMonitor.Contains(previous.X, previous.Y)) return false;
             NativeMethods.RECT clip;
             var screen = new PixelRect(NativeMethods.GetSystemMetrics(NativeMethods.SmXVirtualScreen), NativeMethods.GetSystemMetrics(NativeMethods.SmYVirtualScreen), 0, 0);
             screen.Right = screen.Left + NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenWidth);
             screen.Bottom = screen.Top + NativeMethods.GetSystemMetrics(NativeMethods.SmVirtualScreenHeight);
             if (NativeMethods.GetClipCursor(out clip) && EdgePortal.IsConfined(new PixelRect(clip.Left, clip.Top, clip.Right, clip.Bottom), screen)) return false;
             _edgeArmed = false;
-            _edgeReached(EdgePortal.FractionAt(edge, primary, point.X, point.Y));
-            // Keeps the cursor on the primary when a monitor lies beyond the edge.
+            _edgeReached(EdgePortal.FractionAt(edge, portalMonitor, point.X, point.Y));
+            // Keeps the cursor on this monitor when another lies beyond the edge.
             return true;
         }
 
@@ -552,6 +575,7 @@ namespace WinputLan.Runtime
         private bool _hasCursor;
         // Edge switching: a touch counts only once the cursor has been off the edge since it was armed or placed.
         private ScreenEdge _portalEdge;
+        private PixelRect _chosenMonitor;
         private bool _edgeArmed;
         private int _edgeTouch = -1;
 
@@ -655,12 +679,14 @@ namespace WinputLan.Runtime
             }
         }
 
-        public void SetPortalEdge(ScreenEdge edge)
+        public void SetPortalEdge(ScreenEdge edge, PixelRect monitor)
         {
-            lock (_gate) { _portalEdge = edge; _edgeArmed = false; _edgeTouch = -1; }
+            lock (_gate) { _portalEdge = edge; _chosenMonitor = monitor; _edgeArmed = false; _edgeTouch = -1; }
         }
 
-        // Moves the cursor just inside the edge of the primary monitor, where the controller's cursor left its own.
+        public IList<EdgeMonitor> DescribeMonitors() { return DisplayTopology.Read(); }
+
+        // Moves the cursor just inside the edge of the chosen monitor, where the controller's cursor left its own.
         public bool PlaceAtEdge(ScreenEdge edge, int fraction)
         {
             if (!EdgePortal.IsValid(edge)) return false;
@@ -675,10 +701,10 @@ namespace WinputLan.Runtime
                 lock (_gate)
                 {
                     var tick = Environment.TickCount;
-                    var primary = EdgePortal.Primary(Monitors(tick, left, top, width, height));
-                    if (primary.IsEmpty) return false;
+                    var portalMonitor = EdgePortal.Resolve(Monitors(tick, left, top, width, height), _chosenMonitor);
+                    if (portalMonitor.IsEmpty) return false;
                     int x, y;
-                    EdgePortal.PointAt(edge, primary, fraction, EdgePortal.SpawnInset, out x, out y);
+                    EdgePortal.PointAt(edge, portalMonitor, fraction, EdgePortal.SpawnInset, out x, out y);
                     _cursorX = x; _cursorY = y; _hasCursor = true; _lastDeltaTick = tick;
                     _edgeArmed = false; _edgeTouch = -1;
                     input.Data.Mouse = new NativeMethods.MOUSEINPUT { Dx = PointerCoordinates.ToAbsolute(x, left, width), Dy = PointerCoordinates.ToAbsolute(y, top, height), Flags = NativeMethods.MouseEventMove | NativeMethods.MouseEventAbsolute | NativeMethods.MouseEventVirtualDesk, ExtraInfo = new IntPtr(_tag) };
@@ -702,14 +728,14 @@ namespace WinputLan.Runtime
         // Called under _gate after the tracked cursor has moved from (previousX, previousY) and been clamped.
         private void DetectEdgeTouch(int previousX, int previousY, PixelRect clip, PixelRect screen, List<PixelRect> monitors)
         {
-            var primary = EdgePortal.Primary(monitors);
-            if (!EdgePortal.Touches(_portalEdge, primary, _cursorX, _cursorY)) { _edgeArmed = true; return; }
-            if (!_edgeArmed || !primary.Contains(previousX, previousY) || _pressedButtons.Count != 0 || EdgePortal.IsConfined(clip, screen)) return;
+            var portalMonitor = EdgePortal.Resolve(monitors, _chosenMonitor);
+            if (!EdgePortal.Touches(_portalEdge, portalMonitor, _cursorX, _cursorY)) { _edgeArmed = true; return; }
+            if (!_edgeArmed || !portalMonitor.Contains(previousX, previousY) || _pressedButtons.Count != 0 || EdgePortal.IsConfined(clip, screen)) return;
             _edgeArmed = false;
-            _edgeTouch = EdgePortal.FractionAt(_portalEdge, primary, _cursorX, _cursorY);
-            // Motion that crossed into a monitor beyond the edge stays on the primary, where control will return.
-            _cursorX = Math.Max(primary.Left, Math.Min(primary.Right - 1, _cursorX));
-            _cursorY = Math.Max(primary.Top, Math.Min(primary.Bottom - 1, _cursorY));
+            _edgeTouch = EdgePortal.FractionAt(_portalEdge, portalMonitor, _cursorX, _cursorY);
+            // Motion that crossed into a monitor beyond the edge stays on this monitor, where control will return.
+            _cursorX = Math.Max(portalMonitor.Left, Math.Min(portalMonitor.Right - 1, _cursorX));
+            _cursorY = Math.Max(portalMonitor.Top, Math.Min(portalMonitor.Bottom - 1, _cursorY));
         }
 
         // Called under _gate in the physical-pixel DPI context, so monitor bounds match the cursor space.

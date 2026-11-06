@@ -1,6 +1,6 @@
 {
   "id": "winput-lan",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "entryAssembly": "WinputLan.Module.dll",
   "entryType": "WinputLan.Module.WinputLanModule",
   "sdkVersion": 1,
@@ -8,6 +8,16 @@
   "loadMode": "memory",
   "window": true,
   "releaseNotes": [
+    {
+      "version": "0.7.0",
+      "notes": [
+        "New edge connection window: it shows the monitors of both PCs, one color per PC, with a notebook icon on built-in screens.",
+        "Drag a PC to arrange it: it always sticks to the other PC and aligns to the start, center or end of the neighboring monitor.",
+        "The touching edges are highlighted in full, and an animated pointer shows where the switch happens.",
+        "Edge switching now works on any monitor, not just the primary. Using another monitor of the controlled PC requires version 0.7.0 on that PC too.",
+        "The edge buttons in the main window were replaced by a summary and a Configure button, and the option to connect through the edge moved to the new window."
+      ]
+    },
     {
       "version": "0.6.0",
       "notes": [

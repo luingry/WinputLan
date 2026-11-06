@@ -12,36 +12,37 @@ namespace WinputLan.Core
         Bottom = 4
     }
 
-    // Edge switching: touching the chosen edge of one PC's primary monitor hands control to the other PC,
-    // whose cursor appears at the same relative spot of its own chosen edge. Only primary monitors take part.
-    // Positions along an edge travel as a fraction 0..MaxFraction, so monitors of any size line up.
+    // Edge switching: touching the chosen edge of a monitor of one PC hands control to the other PC, whose cursor
+    // appears at the same relative spot of its own chosen edge. Each PC takes part with one monitor, the primary
+    // unless the settings chose another. Positions along an edge travel as a fraction 0..MaxFraction, so monitors
+    // of any size line up.
     public static class EdgePortal
     {
         public const int MaxFraction = 65535;
         // The arriving cursor lands this far inside the edge, so arriving never counts as touching it.
         public const int SpawnInset = 2;
         public const int PortalPayloadBytes = 4;
+        public const int PortalWithMonitorPayloadBytes = 20;
         public const int ReachedPayloadBytes = 2;
+        public const int MaxLayoutMonitors = 16;
+        private const int LayoutMonitorBytes = 17;
+        private const int MaxLayoutCoordinate = 1 << 20;
+        private const byte LayoutQueryMarker = 0xFF;
 
         public static bool IsValid(ScreenEdge edge) { return edge >= ScreenEdge.Left && edge <= ScreenEdge.Bottom; }
-
-        // Order used by the settings chip: left, right, top, bottom.
-        public static ScreenEdge Next(ScreenEdge edge)
-        {
-            switch (edge)
-            {
-                case ScreenEdge.Left: return ScreenEdge.Right;
-                case ScreenEdge.Right: return ScreenEdge.Top;
-                case ScreenEdge.Top: return ScreenEdge.Bottom;
-                default: return ScreenEdge.Left;
-            }
-        }
 
         // The primary monitor is the one at the virtual-screen origin.
         public static PixelRect Primary(IList<PixelRect> monitors)
         {
             if (monitors != null) foreach (var monitor in monitors) if (!monitor.IsEmpty && monitor.Contains(0, 0)) return monitor;
             return default(PixelRect);
+        }
+
+        // The chosen monitor while it still exists with those bounds; otherwise, or with none chosen, the primary.
+        public static PixelRect Resolve(IList<PixelRect> monitors, PixelRect chosen)
+        {
+            if (!chosen.IsEmpty && monitors != null) foreach (var monitor in monitors) if (monitor.Left == chosen.Left && monitor.Top == chosen.Top && monitor.Right == chosen.Right && monitor.Bottom == chosen.Bottom) return monitor;
+            return Primary(monitors);
         }
 
         // True when (x, y) is on the edge line or beyond it within the edge's span. Beyond covers motion that
@@ -98,20 +99,97 @@ namespace WinputLan.Core
             }
         }
 
-        // Controller -> target, after ControlFocus(1): the target's edge and, after an edge switch, where its cursor appears.
-        public static byte[] EncodePortal(ScreenEdge edge, int? placeFraction)
+        public static byte[] EncodePortal(ScreenEdge edge, int? placeFraction) { return EncodePortal(edge, placeFraction, default(PixelRect)); }
+
+        // Controller -> target, after ControlFocus(1): the target's edge and, after an edge switch, where its cursor
+        // appears. A monitor other than the primary adds its bounds; peers older than 0.7.0 ignore that longer payload,
+        // and only a peer that answered a layout query can have such a monitor chosen.
+        public static byte[] EncodePortal(ScreenEdge edge, int? placeFraction, PixelRect monitor)
         {
             var fraction = placeFraction.HasValue ? Math.Max(0, Math.Min(MaxFraction, placeFraction.Value)) : 0;
-            return new[] { (byte)edge, (byte)(placeFraction.HasValue ? 1 : 0), (byte)(fraction & 0xFF), (byte)(fraction >> 8) };
+            var withMonitor = IsValid(edge) && !monitor.IsEmpty;
+            var payload = new byte[withMonitor ? PortalWithMonitorPayloadBytes : PortalPayloadBytes];
+            payload[0] = (byte)edge;
+            payload[1] = (byte)(placeFraction.HasValue ? 1 : 0);
+            payload[2] = (byte)(fraction & 0xFF);
+            payload[3] = (byte)(fraction >> 8);
+            if (withMonitor) WriteRect(payload, 4, monitor);
+            return payload;
         }
 
         public static bool TryDecodePortal(byte[] payload, out ScreenEdge edge, out int? placeFraction)
         {
-            edge = ScreenEdge.None; placeFraction = null;
-            if (payload == null || payload.Length != PortalPayloadBytes || payload[0] > (byte)ScreenEdge.Bottom || payload[1] > 1) return false;
+            PixelRect monitor;
+            return TryDecodePortal(payload, out edge, out placeFraction, out monitor);
+        }
+
+        public static bool TryDecodePortal(byte[] payload, out ScreenEdge edge, out int? placeFraction, out PixelRect monitor)
+        {
+            edge = ScreenEdge.None; placeFraction = null; monitor = default(PixelRect);
+            if (payload == null || (payload.Length != PortalPayloadBytes && payload.Length != PortalWithMonitorPayloadBytes) || payload[0] > (byte)ScreenEdge.Bottom || payload[1] > 1) return false;
+            if (payload.Length == PortalWithMonitorPayloadBytes)
+            {
+                monitor = ReadRect(payload, 4);
+                if (!IsValid((ScreenEdge)payload[0]) || !IsSaneRect(monitor)) { monitor = default(PixelRect); return false; }
+            }
             edge = (ScreenEdge)payload[0];
             if (payload[1] == 1) placeFraction = payload[2] | (payload[3] << 8);
             return true;
+        }
+
+        // Controller -> target, as an EdgePortal frame: asks for the target's monitors. Peers older than 0.7.0 ignore a
+        // payload of this length, so they never answer with a MonitorLayout frame, whose type would close their session.
+        public static byte[] EncodeLayoutQuery() { return new[] { LayoutQueryMarker }; }
+
+        public static bool IsLayoutQuery(byte[] payload) { return payload != null && payload.Length == 1 && payload[0] == LayoutQueryMarker; }
+
+        // Target -> controller, MonitorLayout frame: a count, then bounds and flags of each monitor.
+        public static byte[] EncodeLayout(IList<EdgeMonitor> monitors)
+        {
+            var count = Math.Min(monitors == null ? 0 : monitors.Count, MaxLayoutMonitors);
+            var payload = new byte[1 + count * LayoutMonitorBytes];
+            payload[0] = (byte)count;
+            for (var i = 0; i < count; i++)
+            {
+                var offset = 1 + i * LayoutMonitorBytes;
+                WriteRect(payload, offset, monitors[i].Bounds);
+                payload[offset + 16] = (byte)((monitors[i].Primary ? 1 : 0) | (monitors[i].Internal ? 2 : 0));
+            }
+            return payload;
+        }
+
+        public static bool TryDecodeLayout(byte[] payload, out List<EdgeMonitor> monitors)
+        {
+            monitors = null;
+            if (payload == null || payload.Length < 1 || payload[0] == 0 || payload[0] > MaxLayoutMonitors || payload.Length != 1 + payload[0] * LayoutMonitorBytes) return false;
+            var decoded = new List<EdgeMonitor>(payload[0]);
+            for (var i = 0; i < payload[0]; i++)
+            {
+                var offset = 1 + i * LayoutMonitorBytes;
+                var rect = ReadRect(payload, offset);
+                if (!IsSaneRect(rect) || payload[offset + 16] > 3) return false;
+                decoded.Add(new EdgeMonitor { Left = rect.Left, Top = rect.Top, Right = rect.Right, Bottom = rect.Bottom, Primary = (payload[offset + 16] & 1) != 0, Internal = (payload[offset + 16] & 2) != 0 });
+            }
+            monitors = decoded;
+            return true;
+        }
+
+        private static bool IsSaneRect(PixelRect rect)
+        {
+            return !rect.IsEmpty && Math.Abs(rect.Left) <= MaxLayoutCoordinate && Math.Abs(rect.Top) <= MaxLayoutCoordinate && Math.Abs(rect.Right) <= MaxLayoutCoordinate && Math.Abs(rect.Bottom) <= MaxLayoutCoordinate;
+        }
+
+        private static void WriteRect(byte[] target, int offset, PixelRect rect)
+        {
+            Array.Copy(BitConverter.GetBytes(rect.Left), 0, target, offset, 4);
+            Array.Copy(BitConverter.GetBytes(rect.Top), 0, target, offset + 4, 4);
+            Array.Copy(BitConverter.GetBytes(rect.Right), 0, target, offset + 8, 4);
+            Array.Copy(BitConverter.GetBytes(rect.Bottom), 0, target, offset + 12, 4);
+        }
+
+        private static PixelRect ReadRect(byte[] source, int offset)
+        {
+            return new PixelRect(BitConverter.ToInt32(source, offset), BitConverter.ToInt32(source, offset + 4), BitConverter.ToInt32(source, offset + 8), BitConverter.ToInt32(source, offset + 12));
         }
 
         // Target -> controller: its cursor touched its edge at this fraction.
