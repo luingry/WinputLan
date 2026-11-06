@@ -1,0 +1,26 @@
+name: prune-releases
+
+# Only the newest release is kept to save storage quota, but the SwissTechKnife catalog downloads the module
+# from the release it names and syncs hours after a publish. Older releases go only once it names the newest.
+on:
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: prune-releases
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Delete older releases
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ./scripts/prune-releases.ps1
