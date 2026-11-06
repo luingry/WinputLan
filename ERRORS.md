@@ -1,5 +1,13 @@
 # Errors and prevention
 
+## 2026-11-06 - Módulo não instalava pelo SwissTechKnife logo após publicar uma versão
+
+- Sintoma: instalar o `winput-lan` pelo STK falhava com "Não foi possível baixar o módulo" depois da publicação da 0.7.0.
+- Causa raiz: o catálogo ainda apontava para `v0.6.0/winput-lan-0.6.0.zip` (HTTP 404), porque `release.yml` apaga as releases antigas logo ao publicar e o catálogo só muda no sync seguinte. O cron `*/15` do `Sync catalog` na prática roda a cada ~5-8 h, então o módulo pode ficar impossível de instalar ou atualizar por horas a cada versão.
+- Solução: disparar o sync na hora: `gh workflow run "Sync catalog" -R luingry/SwissTechKnife`. O catálogo passou para 0.7.0.
+- Diagnóstico: comparar o `package` do `winput-lan` em `catalog/catalog.json` do STK com a release atual e testar a URL. O `host.log` visto de dentro do Claude desktop pode estar defasado, pois o `%LOCALAPPDATA%` é virtualizado nesse contêiner.
+- Prevenção: `prune-releases.yml` substituiu a exclusão do `release.yml` e só apaga as releases antigas quando o catálogo aponta para a mais nova. Um STK aberto com o catálogo antigo em memória ainda pode falhar até recarregá-lo.
+
 ## 2026-10-30 - Módulo winput-lan não abria: Windows Defender pôs o app em quarentena
 
 - Sintoma: o módulo ficava parado. `host.log` do SwissTechKnife: `Could not start Winput LAN` com `Win32Exception` "o arquivo contém um vírus ou software possivelmente indesejado" e, depois, `Winput LAN executable not found: ...\app\WinputLan.Hosted.exe` a cada tentativa.

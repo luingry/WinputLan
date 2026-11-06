@@ -52,8 +52,8 @@ Limits: uninstalling the module from STK cannot remove the task, the Program Fil
 
 ## Release
 
-`.github/workflows/release.yml` runs `scripts/pack-module.ps1` on every `v<VERSION>` tag and attaches the zip to that same app release (the workflow deletes all older releases, so a separately published module zip would disappear). The job fails if the zip is missing and writes its sha256 and size to the job summary for the host catalog:
+`.github/workflows/release.yml` runs `scripts/pack-module.ps1` on every `v<VERSION>` tag and attaches the zip to that same app release (`prune-releases.yml` deletes all older releases, so a separately published module zip would disappear). The job fails if the zip is missing and writes its sha256 and size to the job summary for the host catalog:
 
 `https://github.com/luingry/WinputLan/releases/download/v<VERSION>/winput-lan-<VERSION>.zip`
 
-Because older releases are deleted, the catalog entry must move to the new URL, sha256 and size whenever a new app version is released.
+The catalog entry must move to the new URL, sha256 and size whenever a new app version is released. Its sync runs on the host repository's schedule, hours after a publish in practice; `prune-releases.yml` checks hourly and deletes older releases only after the catalog names the newest one, so the URL an install downloads keeps working.
