@@ -5,6 +5,20 @@ All notable changes to Winput LAN are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versions follow [Semantic Versioning](https://semver.org/).
 
+## [0.7.0] - 2026-11-06
+
+### Adicionado
+
+- Nova janela **Conexão pelas extremidades**, aberta pelo botão **Configurar** abaixo de **Trocar computador pelas extremidades da tela**. Ela mostra os monitores dos dois PCs, com uma cor para cada PC e ícone de notebook na tela interna.
+- Arraste um PC para organizar: ele sempre gruda no outro e se alinha ao início, ao centro ou ao fim do monitor vizinho. Durante o arraste, um contorno mostra onde ele vai ficar.
+- As bordas em contato ficam em destaque verde, inteiras, e um mouse animado mostra por onde a troca acontece. A animação segue a configuração de animações do Windows.
+- A troca pelas extremidades agora funciona em qualquer monitor, não só no principal. Para usar outro monitor do PC controlado, ele também precisa estar na versão 0.7.0 ou mais nova; com uma versão anterior, vale o monitor principal dele.
+
+### Alterado
+
+- Os botões de extremidade da janela principal deram lugar ao resumo das bordas e ao botão **Configurar**. Quem já usava a troca mantém as extremidades atuais até salvar na nova janela.
+- A opção **Conectar pela extremidade quando desconectado** foi para a nova janela.
+
 ## [0.6.0] - 2026-11-06
 
 ### Adicionado

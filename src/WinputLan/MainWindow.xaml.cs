@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
@@ -62,6 +63,7 @@ namespace WinputLan
         private bool _suppressEdgeToggle;
         // The PC controlling this one has edge switching on; this PC's own setting is locked meanwhile.
         private bool _edgeLockedByController;
+        private EdgeLayoutWindow _edgeLayoutWindow;
         // The current outbound session was told edge switching is on.
         private bool _edgeAnnounced;
         // Set when the switch shortcut starts a connection, so input moves to the target once it is ready.
@@ -129,7 +131,7 @@ namespace WinputLan
             AutoAcceptKnownCheckBox.IsChecked = _config.AutoAcceptKnownConnections;
             if (!EdgePortal.IsValid(_config.LocalEdge)) _config.LocalEdge = ScreenEdge.Right;
             if (!EdgePortal.IsValid(_config.RemoteEdge)) _config.RemoteEdge = ScreenEdge.Left;
-            _suppressEdgeToggle = true; EdgeSwitchCheckBox.IsChecked = _config.EdgeSwitchEnabled; EdgeConnectCheckBox.IsChecked = _config.EdgeConnectEnabled; _suppressEdgeToggle = false;
+            _suppressEdgeToggle = true; EdgeSwitchCheckBox.IsChecked = _config.EdgeSwitchEnabled; _suppressEdgeToggle = false;
             RenderEdgeSettings();
             UpdateFrequencyButton.Content = FrequencyLabel(_config.UpdateCheckFrequency);
             _isElevated = ProcessElevation.IsCurrentElevated();
@@ -186,6 +188,7 @@ namespace WinputLan
                 _listenerTask = StartListenerAsync(_listenerCts.Token);
                 _inputRouter = new InputRouter(_inputQueue, _transport, _inputSink);
                 _listenerInputReceiver = new PairedInputReceiver(_listenerTransport, _inputSink);
+                _inputRouter.MonitorLayoutReceived += monitors => Dispatcher.BeginInvoke(new Action(() => ApplyRemoteMonitors(monitors)));
                 _inputRouter.InputAudited += AuditInput;
                 _inputRouter.EdgeReached += fraction => Dispatcher.BeginInvoke(new Action(() => { if (_remoteActive && EdgeSwitchActive) SetInputTarget(false, fraction); }));
                 _listenerInputReceiver.InputAudited += AuditInput;
@@ -790,7 +793,7 @@ namespace WinputLan
             _edgeFractionWhenReady = null;
             _remoteActive = remote;
             // With edge switching on, the target always learns its edge; after an edge crossing also where to appear.
-            _inputRouter?.SetRemoteActive(remote, remote && EdgeSwitchActive ? EdgePortal.EncodePortal(_config.RemoteEdge, edgeFraction) : null);
+            _inputRouter?.SetRemoteActive(remote, remote && EdgeSwitchActive ? EdgePortal.EncodePortal(_config.RemoteEdge, edgeFraction, ChosenMonitor(_config.RemoteEdgeMonitor)) : null);
             if (_capture != null)
             {
                 if (!edgeFraction.HasValue) _capture.SetRemoteActive(remote);
@@ -829,15 +832,47 @@ namespace WinputLan
             SaveEdgeSettings();
         }
 
-        private void EdgeConnectCheckBox_Changed(object sender, RoutedEventArgs e)
+        // Not modal: an access request or an edge switch can arrive while it is open.
+        private void EdgeLayoutButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_suppressEdgeToggle) return;
-            _config.EdgeConnectEnabled = EdgeConnectCheckBox.IsChecked == true;
+            if (_edgeLayoutWindow != null) { _edgeLayoutWindow.Activate(); return; }
+            if (_transport.State == PeerConnectionState.Connected && EdgeSwitchActive) _inputRouter?.QueryMonitorLayout();
+            var target = _config.TrustedTarget;
+            _edgeLayoutWindow = new EdgeLayoutWindow(DisplayTopology.Read(), _config, _config.DisplayName, target != null && !string.IsNullOrWhiteSpace(target.DisplayName) ? target.DisplayName : "Outro PC") { Owner = this };
+            _edgeLayoutWindow.Saved += ApplyEdgeLayout;
+            _edgeLayoutWindow.Closed += (s, args) => _edgeLayoutWindow = null;
+            _edgeLayoutWindow.Show();
+        }
+
+        private void ApplyEdgeLayout(EdgeLayoutResult layout)
+        {
+            _config.LocalEdge = layout.LocalEdge;
+            _config.RemoteEdge = layout.RemoteEdge;
+            _config.LocalEdgeMonitor = layout.LocalMonitor;
+            _config.RemoteEdgeMonitor = layout.RemoteMonitor;
+            _config.EdgeLayoutSaved = true;
+            _config.EdgeLayoutOffsetX = layout.OffsetX;
+            _config.EdgeLayoutOffsetY = layout.OffsetY;
+            _config.EdgeConnectEnabled = layout.ConnectEnabled;
             SaveEdgeSettings();
         }
 
-        private void LocalEdgeButton_Click(object sender, RoutedEventArgs e) { _config.LocalEdge = EdgePortal.Next(_config.LocalEdge); SaveEdgeSettings(); }
-        private void RemoteEdgeButton_Click(object sender, RoutedEventArgs e) { _config.RemoteEdge = EdgePortal.Next(_config.RemoteEdge); SaveEdgeSettings(); }
+        private void ApplyRemoteMonitors(List<EdgeMonitor> monitors)
+        {
+            _config.RemoteMonitors = monitors;
+            try { _configStore.Save(_config); } catch { }
+            _edgeLayoutWindow?.UpdateRemoteMonitors(monitors);
+            AddLog("remote", "local", "Edge", "monitors " + monitors.Count);
+        }
+
+        private static PixelRect ChosenMonitor(EdgeMonitor monitor) { return monitor == null || monitor.Primary ? default(PixelRect) : monitor.Bounds; }
+
+        private void ApplyPortalToCapture()
+        {
+            if (_capture == null) return;
+            _capture.SetPortalMonitor(ChosenMonitor(_config.LocalEdgeMonitor));
+            _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
+        }
 
         private void SaveEdgeSettings()
         {
@@ -853,10 +888,9 @@ namespace WinputLan
             var locked = _edgeLockedByController;
             EdgeSwitchCheckBox.Visibility = locked ? Visibility.Collapsed : Visibility.Visible;
             EdgeSwitchPanel.Visibility = _config.EdgeSwitchEnabled && !locked ? Visibility.Visible : Visibility.Collapsed;
-            EdgeConnectCheckBox.Visibility = EdgeSwitchPanel.Visibility;
-            LocalEdgeButton.Content = EdgeLabel(_config.LocalEdge);
-            RemoteEdgeButton.Content = EdgeLabel(_config.RemoteEdge);
-            if (_capture != null) _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
+            if (EdgeSwitchPanel.Visibility != Visibility.Visible) _edgeLayoutWindow?.Close();
+            EdgeSummaryText.Text = EdgeLabel(_config.LocalEdge) + " ↔ " + EdgeLabel(_config.RemoteEdge);
+            ApplyPortalToCapture();
             AnnounceEdgeSetting();
             SyncEdgeConnectCapture();
         }
@@ -865,13 +899,18 @@ namespace WinputLan
         private void AnnounceEdgeSetting()
         {
             if (_inputRouter == null || _transport.State != PeerConnectionState.Connected) { _edgeAnnounced = false; return; }
-            if (EdgeSwitchActive) { _inputRouter.AnnounceEdgePortal(_config.RemoteEdge); _edgeAnnounced = true; }
+            if (EdgeSwitchActive)
+            {
+                if (!_edgeAnnounced) _inputRouter.QueryMonitorLayout();
+                _inputRouter.AnnounceEdgePortal(_config.RemoteEdge);
+                _edgeAnnounced = true;
+            }
             else if (_edgeAnnounced) { _inputRouter.AnnounceEdgePortal(ScreenEdge.None); _edgeAnnounced = false; }
         }
 
         private static string EdgePercent(int fraction) { return Math.Round(fraction * 100.0 / EdgePortal.MaxFraction) + "%"; }
 
-        private static string EdgeLabel(ScreenEdge edge)
+        internal static string EdgeLabel(ScreenEdge edge)
         {
             switch (edge)
             {
@@ -913,7 +952,7 @@ namespace WinputLan
                 Dispatcher.BeginInvoke(new Action(() => SetInputTarget(action == HotkeyAction.SelectRemote)));
                 return true;
             }, fraction => Dispatcher.BeginInvoke(new Action(() => SetInputTarget(true, fraction))));
-            _capture.PortalEdge = EdgeSwitchActive ? _config.LocalEdge : ScreenEdge.None;
+            ApplyPortalToCapture();
             _capture.MouseHookRecovered += detail => AddLog("local", "local", "Hooks", detail);
             _capture.Start();
             AddLog("local", "remote", "Hooks", "controller-active");

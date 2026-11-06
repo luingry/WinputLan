@@ -51,7 +51,7 @@ namespace WinputLan.Runtime
             _disposed = true;
             _transport.FrameReceived -= Transport_FrameReceived;
             _transport.StateChanged -= Transport_StateChanged;
-            lock (_inputGate) { _focused = false; _epoch++; _queue.Complete(); ReleaseAll(); _portal?.SetPortalEdge(ScreenEdge.None); }
+            lock (_inputGate) { _focused = false; _epoch++; _queue.Complete(); ReleaseAll(); _portal?.SetPortalEdge(ScreenEdge.None, default(PixelRect)); }
         }
 
         private void Transport_FrameReceived(Frame frame)
@@ -67,18 +67,21 @@ namespace WinputLan.Runtime
                 // A disconnect must release inputs after an in-flight injection has finished, never before.
                 long? ack = null;
                 int? edgeFraction = null;
-                lock (_inputGate) { if (!_disposed && entry.Epoch == _epoch) HandleFrame(entry, out ack, out edgeFraction); }
+                var layoutAsked = false;
+                lock (_inputGate) { if (!_disposed && entry.Epoch == _epoch) HandleFrame(entry, out ack, out edgeFraction, out layoutAsked); }
                 // Don't acquire the transport gate while holding the injection gate: state callbacks
                 // can originate under the transport gate during connection publication.
                 if (edgeFraction.HasValue) _ = SendFrameAsync(FrameType.EdgeReached, EdgePortal.EncodeReached(edgeFraction.Value));
+                if (layoutAsked) _ = System.Threading.Tasks.Task.Run(() => SendMonitorLayoutAsync());
                 if (ack.HasValue) _ = SendFrameAsync(FrameType.InputAck, BitConverter.GetBytes(ack.Value));
             }
         }
 
-        private void HandleFrame(InboundFrameQueue.Entry entry, out long? ack, out int? edgeFraction)
+        private void HandleFrame(InboundFrameQueue.Entry entry, out long? ack, out int? edgeFraction, out bool layoutAsked)
         {
             ack = null;
             edgeFraction = null;
+            layoutAsked = false;
             var frame = entry.Frame;
             if (!_transport.AllowsInputReceive && (frame.Type == FrameType.Input || frame.Type == FrameType.ReleaseAll || frame.Type == FrameType.EdgePortal))
             {
@@ -91,7 +94,7 @@ namespace WinputLan.Runtime
                 {
                     _focused = frame.Payload[0] == 1;
                     // Each focus starts without an edge; an EdgePortal frame right behind it sets one.
-                    _portal?.SetPortalEdge(ScreenEdge.None);
+                    _portal?.SetPortalEdge(ScreenEdge.None, default(PixelRect));
                     if (!_focused) ReleaseAll();
                     FocusChanged?.Invoke(_focused);
                 }
@@ -99,13 +102,15 @@ namespace WinputLan.Runtime
             }
             if (frame.Type == FrameType.EdgePortal)
             {
+                if (EdgePortal.IsLayoutQuery(frame.Payload)) { layoutAsked = _transport.State == PeerConnectionState.Connected && _portal != null; return; }
                 ScreenEdge edge;
                 int? place;
-                if (_transport.State != PeerConnectionState.Connected || !EdgePortal.TryDecodePortal(frame.Payload, out edge, out place)) return;
+                PixelRect monitor;
+                if (_transport.State != PeerConnectionState.Connected || !EdgePortal.TryDecodePortal(frame.Payload, out edge, out place, out monitor)) return;
                 // Also sent outside focus, when the session starts or the controller changes the setting.
                 SetControllerEdgeSwitching(EdgePortal.IsValid(edge));
                 if (_portal == null || !_focused) return;
-                _portal.SetPortalEdge(edge);
+                _portal.SetPortalEdge(edge, monitor);
                 if (place.HasValue && EdgePortal.IsValid(edge))
                 {
                     var placed = _portal.PlaceAtEdge(edge, place.Value);
@@ -141,6 +146,16 @@ namespace WinputLan.Runtime
             ControllerEdgeSwitchingChanged?.Invoke(on);
         }
 
+        private async System.Threading.Tasks.Task SendMonitorLayoutAsync()
+        {
+            try
+            {
+                var monitors = _portal.DescribeMonitors();
+                if (monitors != null && monitors.Count > 0) await SendFrameAsync(FrameType.MonitorLayout, EdgePortal.EncodeLayout(monitors)).ConfigureAwait(false);
+            }
+            catch { }
+        }
+
         private async System.Threading.Tasks.Task SendFrameAsync(FrameType type, byte[] payload)
         {
             try { await _transport.SendAsync(type, payload, CancellationToken.None).ConfigureAwait(false); }
@@ -155,7 +170,7 @@ namespace WinputLan.Runtime
                 _focused = false;
                 Interlocked.Increment(ref _epoch);
                 _queue.Clear();
-                _portal?.SetPortalEdge(ScreenEdge.None);
+                _portal?.SetPortalEdge(ScreenEdge.None, default(PixelRect));
                 SetControllerEdgeSwitching(false);
                 if (state != PeerConnectionState.Connected) { ReleaseAll(); FocusChanged?.Invoke(false); }
             }

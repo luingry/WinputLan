@@ -23,7 +23,10 @@ namespace WinputLan.Core
         // cursor appears (EdgePortal payload). Peers older than 0.3.22 close the session on it.
         EdgePortal = 12,
         // Target -> controller: its cursor touched its edge (EdgePortal payload).
-        EdgeReached = 13
+        EdgeReached = 13,
+        // Target -> controller, only as the answer to a layout query (EdgePortal payload). Peers older than 0.7.0
+        // close the session on this type and never ask.
+        MonitorLayout = 14
     }
 
     public enum InputKind : byte
